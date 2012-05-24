@@ -2819,11 +2819,7 @@ static inline int l2cap_disconnect_req(struct l2cap_conn *conn,
 
 	BT_DBG("scid 0x%4.4x dcid 0x%4.4x", scid, dcid);
 
-	chan = l2cap_get_chan_by_scid(conn, dcid);
-	if (!chan)
-		return 0;
-
-	sk = chan->sk;
+	lock_sock(sk);
 
 	rsp.dcid = cpu_to_le16(chan->scid);
 	rsp.scid = cpu_to_le16(chan->dcid);
@@ -2878,8 +2874,19 @@ static inline int l2cap_disconnect_rsp(struct l2cap_conn *conn,
 	l2cap_chan_del(chan, 0);
 	bh_unlock_sock(sk);
 
-	chan->ops->close(chan->data);
-	return 0;
+static void l2cap_logical_link_worker(struct work_struct *work)
+{
+	struct l2cap_logical_link_work *log_link_work =
+		container_of(work, struct l2cap_logical_link_work, work);
+	struct sock *sk = log_link_work->chan->l2cap_sk;
+
+	if (sk) {
+		l2cap_logical_link_complete(log_link_work->chan,
+							log_link_work->status);
+		sock_put(sk);
+	}
+	hci_chan_put(log_link_work->chan);
+	kfree(log_link_work);
 }
 
 static inline int l2cap_information_req(struct l2cap_conn *conn,
