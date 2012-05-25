@@ -1645,8 +1645,24 @@ static int start_discovery(struct sock *sk, u16 index)
 	cp.num_rsp = 0x00;
 
 	err = hci_send_cmd(hdev, HCI_OP_INQUIRY, sizeof(cp), &cp);
-	if (err < 0)
+
+	if (err < 0) {
 		mgmt_pending_remove(cmd);
+		hdev->disco_state = SCAN_IDLE;
+	} else if (lmp_le_capable(hdev)) {
+		cmd = mgmt_pending_find(MGMT_OP_STOP_DISCOVERY, index);
+		if (!cmd)
+			mgmt_pending_add(sk, MGMT_OP_STOP_DISCOVERY, index,
+								NULL, 0);
+		hdev->disco_int_phase = 1;
+		hdev->disco_int_count = 0;
+		hdev->disco_state = SCAN_BR;
+		del_timer(&hdev->disco_le_timer);
+		del_timer(&hdev->disco_timer);
+		mod_timer(&hdev->disco_timer,
+				jiffies + msecs_to_jiffies(20000));
+	} else
+		hdev->disco_state = SCAN_BR;
 
 failed:
 	hci_dev_unlock_bh(hdev);
@@ -1656,6 +1672,56 @@ failed:
 }
 
 static int stop_discovery(struct sock *sk, u16 index)
+{
+	struct hci_cp_le_set_scan_enable le_cp = {0, 0};
+	struct mgmt_mode mode_cp = {0};
+	struct hci_dev *hdev;
+	struct pending_cmd *cmd = NULL;
+	int err = -EPERM;
+	u8 state;
+
+	BT_DBG("");
+
+	hdev = hci_dev_get(index);
+	if (!hdev)
+		return cmd_status(sk, index, MGMT_OP_STOP_DISCOVERY, ENODEV);
+
+	hci_dev_lock_bh(hdev);
+
+	state = hdev->disco_state;
+	hdev->disco_state = SCAN_IDLE;
+	del_timer(&hdev->disco_le_timer);
+	del_timer(&hdev->disco_timer);
+
+	if (state == SCAN_LE) {
+		err = hci_send_cmd(hdev, HCI_OP_LE_SET_SCAN_ENABLE,
+							sizeof(le_cp), &le_cp);
+		if (err >= 0) {
+			mgmt_pending_foreach(MGMT_OP_STOP_DISCOVERY, index,
+						discovery_terminated, NULL);
+
+			err = cmd_complete(sk, index, MGMT_OP_STOP_DISCOVERY,
+								NULL, 0);
+		}
+	} else if (state == SCAN_BR)
+		err = hci_send_cmd(hdev, HCI_OP_INQUIRY_CANCEL, 0, NULL);
+
+	cmd = mgmt_pending_find(MGMT_OP_STOP_DISCOVERY, index);
+	if (err < 0 && cmd)
+		mgmt_pending_remove(cmd);
+
+	mgmt_event(MGMT_EV_DISCOVERING, index, &mode_cp, sizeof(mode_cp), NULL);
+
+	hci_dev_unlock_bh(hdev);
+	hci_dev_put(hdev);
+
+	if (err < 0)
+		return cmd_status(sk, index, MGMT_OP_STOP_DISCOVERY, -err);
+	else
+		return err;
+}
+
+static int read_local_oob_data(struct sock *sk, u16 index)
 {
 	struct hci_dev *hdev;
 	struct pending_cmd *cmd;
