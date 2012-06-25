@@ -348,6 +348,130 @@ failed:
 	return err;
 }
 
+static u8 get_service_classes(struct hci_dev *hdev)
+{
+	struct list_head *p;
+	u8 val = 0;
+
+	list_for_each(p, &hdev->uuids) {
+		struct bt_uuid *uuid = list_entry(p, struct bt_uuid, list);
+
+		val |= uuid->svc_hint;
+	}
+
+	return val;
+}
+
+static int update_class(struct hci_dev *hdev)
+{
+	u8 cod[3];
+	int err = 0;
+
+	BT_DBG("%s", hdev->name);
+
+	if (test_bit(HCI_SERVICE_CACHE, &hdev->flags))
+		return 0;
+
+	cod[0] = hdev->minor_class;
+	cod[1] = hdev->major_class;
+	cod[2] = get_service_classes(hdev);
+
+	if (memcmp(cod, hdev->dev_class, 3) == 0)
+		return 0;
+
+	err =  hci_send_cmd(hdev, HCI_OP_WRITE_CLASS_OF_DEV, sizeof(cod), cod);
+
+	if (err == 0)
+		memcpy(hdev->dev_class, cod, 3);
+
+	return err;
+}
+
+static int set_limited_discoverable(struct sock *sk, u16 index,
+						unsigned char *data, u16 len)
+{
+	struct mgmt_mode *cp;
+	struct hci_dev *hdev;
+	struct pending_cmd *cmd;
+	struct hci_cp_write_current_iac_lap dcp;
+	int update_cod;
+	int err = 0;
+	/* General Inquiry LAP: 0x9E8B33, Limited Inquiry LAP: 0x9E8B00 */
+	u8 lap[] = { 0x33, 0x8b, 0x9e, 0x00, 0x8b, 0x9e };
+
+	cp = (void *) data;
+
+	BT_DBG("hci%u discoverable: %d", index, cp->val);
+
+	if (!cp || len != sizeof(*cp))
+		return cmd_status(sk, index, MGMT_OP_SET_LIMIT_DISCOVERABLE,
+									EINVAL);
+
+	hdev = hci_dev_get(index);
+	if (!hdev)
+		return cmd_status(sk, index, MGMT_OP_SET_LIMIT_DISCOVERABLE,
+									ENODEV);
+
+	hci_dev_lock_bh(hdev);
+
+	if (!test_bit(HCI_UP, &hdev->flags)) {
+		err = cmd_status(sk, index, MGMT_OP_SET_LIMIT_DISCOVERABLE,
+								ENETDOWN);
+		goto failed;
+	}
+
+	if (mgmt_pending_find(MGMT_OP_SET_LIMIT_DISCOVERABLE, index)) {
+		err = cmd_status(sk, index, MGMT_OP_SET_LIMIT_DISCOVERABLE,
+									EBUSY);
+		goto failed;
+	}
+
+	if (cp->val == test_bit(HCI_ISCAN, &hdev->flags) &&
+					test_bit(HCI_PSCAN, &hdev->flags)) {
+		err = cmd_status(sk, index, MGMT_OP_SET_LIMIT_DISCOVERABLE,
+								EALREADY);
+		goto failed;
+	}
+
+	cmd = mgmt_pending_add(sk, MGMT_OP_SET_LIMIT_DISCOVERABLE, index, data,
+									len);
+	if (!cmd) {
+		err = -ENOMEM;
+		goto failed;
+	}
+
+	memset(&dcp, 0, sizeof(dcp));
+	dcp.num_current_iac = cp->val ? 2 : 1;
+	memcpy(&dcp.lap, lap, dcp.num_current_iac * 3);
+	update_cod = 1;
+
+	if (cp->val) {
+		if (hdev->major_class & MGMT_MAJOR_CLASS_LIMITED)
+			update_cod = 0;
+		hdev->major_class |= MGMT_MAJOR_CLASS_LIMITED;
+	} else {
+		if (!(hdev->major_class & MGMT_MAJOR_CLASS_LIMITED))
+			update_cod = 0;
+		hdev->major_class &= ~MGMT_MAJOR_CLASS_LIMITED;
+	}
+
+	if (update_cod)
+		err = update_class(hdev);
+
+	if (err >= 0)
+		err = hci_send_cmd(hdev, HCI_OP_WRITE_CURRENT_IAC_LAP,
+							sizeof(dcp), &dcp);
+
+	if (err < 0)
+		mgmt_pending_remove(cmd);
+
+failed:
+	hci_dev_unlock_bh(hdev);
+	hci_dev_put(hdev);
+
+	return err;
+}
+
 static int set_discoverable(struct sock *sk, u16 index, unsigned char *data,
 									u16 len)
 {
@@ -852,9 +976,12 @@ static int set_dev_class(struct sock *sk, u16 index, unsigned char *data,
 	hdev->major_class = cp->major;
 	hdev->minor_class = cp->minor;
 
-	err = update_class(hdev);
-
-	if (err == 0)
+	if (test_bit(HCI_UP, &hdev->flags)) {
+		err = update_class(hdev);
+		if (err == 0)
+			err = cmd_complete(sk, index,
+		MGMT_OP_SET_DEV_CLASS, hdev->dev_class, sizeof(u8)*3);
+	} else
 		err = cmd_complete(sk, index, MGMT_OP_SET_DEV_CLASS, NULL, 0);
 
 	hci_dev_unlock_bh(hdev);
