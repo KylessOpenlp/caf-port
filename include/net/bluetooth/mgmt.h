@@ -312,4 +312,50 @@ struct mgmt_ev_remote_name {
 
 #define MGMT_EV_DISCOVERING		0x0014
 
+#define MGMT_EV_USER_PASSKEY_REQUEST	0x0015
+struct mgmt_ev_user_passkey_request {
+	bdaddr_t bdaddr;
+} __packed;
+
+#define MGMT_EV_ENCRYPT_CHANGE		0x0016
+struct mgmt_ev_encrypt_change {
+	bdaddr_t bdaddr;
+	__u8 status;
+} __packed;
+
+
+#define MGMT_EV_REMOTE_CLASS		0x0017
+struct mgmt_ev_remote_class {
+	bdaddr_t bdaddr;
+	__u8 dev_class[3];
+} __packed;
+
+#define MGMT_EV_REMOTE_VERSION		0x0018
+struct mgmt_ev_remote_version {
+	bdaddr_t bdaddr;
+	__u8	lmp_ver;
+	__u16	manufacturer;
+	__u16	lmp_subver;
+} __packed;
+
+#define MGMT_EV_REMOTE_FEATURES		0x0019
+struct mgmt_ev_remote_features {
+	bdaddr_t bdaddr;
+	uint8_t features[8];
+} __packed;
+
+#define MGMT_EV_RSSI_UPDATE		0x0020
+struct mgmt_ev_rssi_update {
+	bdaddr_t	bdaddr;
+	__s8			rssi;
+} __packed;
+
+#define MGMT_EV_LE_CONN_PARAMS		0xF000
+struct mgmt_ev_le_conn_params {
+	bdaddr_t bdaddr;
+	__u16 interval;
+	__u16 latency;
+	__u16 timeout;
+} __packed;
+
 #endif /*BT_MGMT*/
