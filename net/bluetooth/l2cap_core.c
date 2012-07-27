@@ -660,15 +660,8 @@ static inline void l2cap_send_sframe(struct l2cap_chan *chan, u16 control)
 	if (!skb)
 		return;
 
-	lh = (struct l2cap_hdr *) skb_put(skb, L2CAP_HDR_SIZE);
-	lh->len = cpu_to_le16(hlen - L2CAP_HDR_SIZE);
-	lh->cid = cpu_to_le16(chan->dcid);
-	put_unaligned_le16(control, skb_put(skb, 2));
-
-	if (chan->fcs == L2CAP_FCS_CRC16) {
-		u16 fcs = crc16(0, (u8 *)lh, count - 2);
-		put_unaligned_le16(fcs, skb_put(skb, 2));
-	}
+	if (conn->hcon == NULL || conn->hcon->hdev == NULL)
+		return;
 
 	if (lmp_no_flush_capable(conn->hcon->hdev))
 		flags = ACL_START_NO_FLUSH;
