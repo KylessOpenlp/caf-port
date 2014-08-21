@@ -1,0 +1,799 @@
+diff -ruN a/arch/alpha/kernel/.gitignore b/arch/alpha/kernel/.gitignore
+--- a/arch/alpha/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/alpha/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vmlinux.lds
+diff -ruN a/arch/arm/boot/compressed/.gitignore b/arch/arm/boot/compressed/.gitignore
+--- a/arch/arm/boot/compressed/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/arm/boot/compressed/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,16 @@
++font.c
++lib1funcs.S
++piggy.gzip
++piggy.lzo
++piggy.lzma
++vmlinux
++vmlinux.lds
++
++# borrowed libfdt files
++fdt.c
++fdt.h
++fdt_ro.c
++fdt_rw.c
++fdt_wip.c
++libfdt.h
++libfdt_internal.h
+diff -ruN a/arch/arm/boot/.gitignore b/arch/arm/boot/.gitignore
+--- a/arch/arm/boot/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/arm/boot/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,5 @@
++Image
++zImage
++xipImage
++bootpImage
++uImage
+diff -ruN a/arch/arm/kernel/.gitignore b/arch/arm/kernel/.gitignore
+--- a/arch/arm/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/arm/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vmlinux.lds
+diff -ruN a/arch/avr32/boot/images/.gitignore b/arch/avr32/boot/images/.gitignore
+--- a/arch/avr32/boot/images/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/avr32/boot/images/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,4 @@
++uImage
++uImage.srec
++vmlinux.cso
++sfdwarf.log
+diff -ruN a/arch/avr32/kernel/.gitignore b/arch/avr32/kernel/.gitignore
+--- a/arch/avr32/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/avr32/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vmlinux.lds
+diff -ruN a/arch/blackfin/boot/.gitignore b/arch/blackfin/boot/.gitignore
+--- a/arch/blackfin/boot/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/blackfin/boot/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++vmImage*
++vmlinux*
+diff -ruN a/arch/blackfin/kernel/.gitignore b/arch/blackfin/kernel/.gitignore
+--- a/arch/blackfin/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/blackfin/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vmlinux.lds
+diff -ruN a/arch/cris/boot/.gitignore b/arch/cris/boot/.gitignore
+--- a/arch/cris/boot/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/cris/boot/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++Image
++zImage
+diff -ruN a/arch/.gitignore b/arch/.gitignore
+--- a/arch/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++i386
++x86_64
+diff -ruN a/arch/ia64/kernel/.gitignore b/arch/ia64/kernel/.gitignore
+--- a/arch/ia64/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/ia64/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++gate.lds
++vmlinux.lds
+diff -ruN a/arch/m32r/kernel/.gitignore b/arch/m32r/kernel/.gitignore
+--- a/arch/m32r/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/m32r/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vmlinux.lds
+diff -ruN a/arch/m68k/kernel/.gitignore b/arch/m68k/kernel/.gitignore
+--- a/arch/m68k/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/m68k/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vmlinux.lds
+diff -ruN a/arch/mips/boot/.gitignore b/arch/mips/boot/.gitignore
+--- a/arch/mips/boot/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/mips/boot/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,6 @@
++mkboot
++elf2ecoff
++vmlinux.*
++zImage
++zImage.tmp
++calc_vmlinuz_load_addr
+diff -ruN a/arch/mips/kernel/.gitignore b/arch/mips/kernel/.gitignore
+--- a/arch/mips/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/mips/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vmlinux.lds
+diff -ruN a/arch/mn10300/boot/.gitignore b/arch/mn10300/boot/.gitignore
+--- a/arch/mn10300/boot/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/mn10300/boot/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++zImage
+diff -ruN a/arch/parisc/kernel/.gitignore b/arch/parisc/kernel/.gitignore
+--- a/arch/parisc/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/parisc/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vmlinux.lds
+diff -ruN a/arch/powerpc/boot/.gitignore b/arch/powerpc/boot/.gitignore
+--- a/arch/powerpc/boot/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/powerpc/boot/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,47 @@
++addnote
++empty.c
++hack-coff
++infblock.c
++infblock.h
++infcodes.c
++infcodes.h
++inffast.c
++inffast.h
++inffixed.h
++inflate.c
++inflate.h
++inftrees.c
++inftrees.h
++infutil.c
++infutil.h
++kernel-vmlinux.strip.c
++kernel-vmlinux.strip.gz
++mktree
++uImage
++cuImage.*
++dtbImage.*
++treeImage.*
++zImage
++zImage.initrd
++zImage.bin.*
++zImage.chrp
++zImage.coff
++zImage.holly
++zImage.iseries
++zImage.*lds
++zImage.miboot
++zImage.pmac
++zImage.pseries
++zconf.h
++zlib.h
++zutil.h
++fdt.c
++fdt.h
++fdt_ro.c
++fdt_rw.c
++fdt_strerror.c
++fdt_sw.c
++fdt_wip.c
++libfdt.h
++libfdt_internal.h
++
+diff -ruN a/arch/powerpc/kernel/.gitignore b/arch/powerpc/kernel/.gitignore
+--- a/arch/powerpc/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/powerpc/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vmlinux.lds
+diff -ruN a/arch/powerpc/kernel/vdso32/.gitignore b/arch/powerpc/kernel/vdso32/.gitignore
+--- a/arch/powerpc/kernel/vdso32/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/powerpc/kernel/vdso32/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++vdso32.lds
++vdso32.so.dbg
+diff -ruN a/arch/powerpc/kernel/vdso64/.gitignore b/arch/powerpc/kernel/vdso64/.gitignore
+--- a/arch/powerpc/kernel/vdso64/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/powerpc/kernel/vdso64/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++vdso64.lds
++vdso64.so.dbg
+diff -ruN a/arch/powerpc/platforms/cell/spufs/.gitignore b/arch/powerpc/platforms/cell/spufs/.gitignore
+--- a/arch/powerpc/platforms/cell/spufs/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/powerpc/platforms/cell/spufs/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++spu_save_dump.h
++spu_restore_dump.h
+diff -ruN a/arch/sh/boot/compressed/.gitignore b/arch/sh/boot/compressed/.gitignore
+--- a/arch/sh/boot/compressed/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/sh/boot/compressed/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vmlinux.bin.*
+diff -ruN a/arch/sh/boot/.gitignore b/arch/sh/boot/.gitignore
+--- a/arch/sh/boot/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/sh/boot/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,3 @@
++zImage
++vmlinux*
++uImage*
+diff -ruN a/arch/sh/kernel/.gitignore b/arch/sh/kernel/.gitignore
+--- a/arch/sh/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/sh/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vmlinux.lds
+diff -ruN a/arch/sh/kernel/vsyscall/.gitignore b/arch/sh/kernel/vsyscall/.gitignore
+--- a/arch/sh/kernel/vsyscall/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/sh/kernel/vsyscall/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vsyscall.lds
+diff -ruN a/arch/sparc/boot/.gitignore b/arch/sparc/boot/.gitignore
+--- a/arch/sparc/boot/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/sparc/boot/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,8 @@
++btfix.S
++btfixupprep
++image
++zImage
++tftpboot.img
++vmlinux.aout
++piggyback
++
+diff -ruN a/arch/sparc/kernel/.gitignore b/arch/sparc/kernel/.gitignore
+--- a/arch/sparc/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/sparc/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vmlinux.lds
+diff -ruN a/arch/um/.gitignore b/arch/um/.gitignore
+--- a/arch/um/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/um/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,3 @@
++kernel/config.c
++kernel/config.tmp
++kernel/vmlinux.lds
+diff -ruN a/arch/unicore32/.gitignore b/arch/unicore32/.gitignore
+--- a/arch/unicore32/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/unicore32/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,21 @@
++#
++# Generated include files
++#
++include/generated
++#
++# Generated ld script file
++#
++kernel/vmlinux.lds
++#
++# Generated images in boot
++#
++boot/Image
++boot/zImage
++boot/uImage
++#
++# Generated files in boot/compressed
++#
++boot/compressed/piggy.S
++boot/compressed/piggy.gzip
++boot/compressed/vmlinux
++boot/compressed/vmlinux.lds
+diff -ruN a/arch/x86/boot/compressed/.gitignore b/arch/x86/boot/compressed/.gitignore
+--- a/arch/x86/boot/compressed/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/x86/boot/compressed/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,6 @@
++relocs
++vmlinux.bin.all
++vmlinux.relocs
++vmlinux.lds
++mkpiggy
++piggy.S
+diff -ruN a/arch/x86/boot/.gitignore b/arch/x86/boot/.gitignore
+--- a/arch/x86/boot/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/x86/boot/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,10 @@
++bootsect
++bzImage
++cpustr.h
++mkcpustr
++offsets.h
++voffset.h
++zoffset.h
++setup
++setup.bin
++setup.elf
+diff -ruN a/arch/x86/boot/tools/.gitignore b/arch/x86/boot/tools/.gitignore
+--- a/arch/x86/boot/tools/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/x86/boot/tools/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++build
+diff -ruN a/arch/x86/.gitignore b/arch/x86/.gitignore
+--- a/arch/x86/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/x86/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,3 @@
++boot/compressed/vmlinux
++tools/test_get_len
++
+diff -ruN a/arch/x86/kernel/acpi/realmode/.gitignore b/arch/x86/kernel/acpi/realmode/.gitignore
+--- a/arch/x86/kernel/acpi/realmode/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/x86/kernel/acpi/realmode/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,3 @@
++wakeup.bin
++wakeup.elf
++wakeup.lds
+diff -ruN a/arch/x86/kernel/cpu/.gitignore b/arch/x86/kernel/cpu/.gitignore
+--- a/arch/x86/kernel/cpu/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/x86/kernel/cpu/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++capflags.c
+diff -ruN a/arch/x86/kernel/.gitignore b/arch/x86/kernel/.gitignore
+--- a/arch/x86/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/x86/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,3 @@
++vsyscall.lds
++vsyscall_32.lds
++vmlinux.lds
+diff -ruN a/arch/x86/lib/.gitignore b/arch/x86/lib/.gitignore
+--- a/arch/x86/lib/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/x86/lib/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++inat-tables.c
+diff -ruN a/arch/x86/vdso/.gitignore b/arch/x86/vdso/.gitignore
+--- a/arch/x86/vdso/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/x86/vdso/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,6 @@
++vdso.lds
++vdso-syms.lds
++vdso32-syms.lds
++vdso32-syscall-syms.lds
++vdso32-sysenter-syms.lds
++vdso32-int80-syms.lds
+diff -ruN a/arch/x86/vdso/vdso32/.gitignore b/arch/x86/vdso/vdso32/.gitignore
+--- a/arch/x86/vdso/vdso32/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/arch/x86/vdso/vdso32/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++vdso32.lds
+diff -ruN a/Documentation/accounting/.gitignore b/Documentation/accounting/.gitignore
+--- a/Documentation/accounting/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/accounting/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++getdelays
+diff -ruN a/Documentation/auxdisplay/.gitignore b/Documentation/auxdisplay/.gitignore
+--- a/Documentation/auxdisplay/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/auxdisplay/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++cfag12864b-example
+diff -ruN a/Documentation/connector/.gitignore b/Documentation/connector/.gitignore
+--- a/Documentation/connector/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/connector/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++ucon
+diff -ruN a/Documentation/DocBook/dvb/.gitignore b/Documentation/DocBook/dvb/.gitignore
+--- a/Documentation/DocBook/dvb/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/DocBook/dvb/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++!*.xml
+diff -ruN a/Documentation/DocBook/.gitignore b/Documentation/DocBook/.gitignore
+--- a/Documentation/DocBook/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/DocBook/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,11 @@
++*.xml
++*.ps
++*.pdf
++*.html
++*.9.gz
++*.9
++*.aux
++*.dvi
++*.log
++*.out
++media/
+diff -ruN a/Documentation/DocBook/v4l/.gitignore b/Documentation/DocBook/v4l/.gitignore
+--- a/Documentation/DocBook/v4l/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/DocBook/v4l/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++!*.xml
+diff -ruN a/Documentation/.gitignore b/Documentation/.gitignore
+--- a/Documentation/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,7 @@
++filesystems/dnotify_test
++laptops/dslm
++timers/hpet_example
++vm/hugepage-mmap
++vm/hugepage-shm
++vm/map_hugetlb
++
+diff -ruN a/Documentation/ia64/.gitignore b/Documentation/ia64/.gitignore
+--- a/Documentation/ia64/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/ia64/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++aliasing-test
+diff -ruN a/Documentation/networking/.gitignore b/Documentation/networking/.gitignore
+--- a/Documentation/networking/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/networking/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++ifenslave
+diff -ruN a/Documentation/networking/timestamping/.gitignore b/Documentation/networking/timestamping/.gitignore
+--- a/Documentation/networking/timestamping/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/networking/timestamping/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++timestamping
+diff -ruN a/Documentation/pcmcia/.gitignore b/Documentation/pcmcia/.gitignore
+--- a/Documentation/pcmcia/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/pcmcia/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++crc32hash
+diff -ruN a/Documentation/spi/.gitignore b/Documentation/spi/.gitignore
+--- a/Documentation/spi/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/spi/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++spidev_fdx
++spidev_test
+diff -ruN a/Documentation/video4linux/.gitignore b/Documentation/video4linux/.gitignore
+--- a/Documentation/video4linux/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/video4linux/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++v4lgrab
+diff -ruN a/Documentation/virtual/lguest/.gitignore b/Documentation/virtual/lguest/.gitignore
+--- a/Documentation/virtual/lguest/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/virtual/lguest/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++lguest
+diff -ruN a/Documentation/vm/.gitignore b/Documentation/vm/.gitignore
+--- a/Documentation/vm/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/vm/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++page-types
++slabinfo
+diff -ruN a/Documentation/watchdog/src/.gitignore b/Documentation/watchdog/src/.gitignore
+--- a/Documentation/watchdog/src/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/Documentation/watchdog/src/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++watchdog-simple
++watchdog-test
+diff -ruN a/drivers/atm/.gitignore b/drivers/atm/.gitignore
+--- a/drivers/atm/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/drivers/atm/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,5 @@
++# Ignore generated files
++fore200e_mkfirm
++fore200e_pca_fw.c
++pca200e.bin
++pca200e_ecd.bin2
+diff -ruN a/drivers/eisa/.gitignore b/drivers/eisa/.gitignore
+--- a/drivers/eisa/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/drivers/eisa/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++devlist.h
+diff -ruN a/drivers/gpu/drm/radeon/.gitignore b/drivers/gpu/drm/radeon/.gitignore
+--- a/drivers/gpu/drm/radeon/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/drivers/gpu/drm/radeon/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,3 @@
++mkregtable
++*_reg_safe.h
++
+diff -ruN a/drivers/net/wan/.gitignore b/drivers/net/wan/.gitignore
+--- a/drivers/net/wan/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/drivers/net/wan/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++wanxlfw.inc
+diff -ruN a/drivers/pci/.gitignore b/drivers/pci/.gitignore
+--- a/drivers/pci/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/drivers/pci/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,4 @@
++classlist.h
++devlist.h
++gen-devlist
++
+diff -ruN a/drivers/scsi/aic7xxx/.gitignore b/drivers/scsi/aic7xxx/.gitignore
+--- a/drivers/scsi/aic7xxx/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/drivers/scsi/aic7xxx/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,6 @@
++aic79xx_reg.h
++aic79xx_reg_print.c
++aic79xx_seq.h
++aic7xxx_reg.h
++aic7xxx_reg_print.c
++aic7xxx_seq.h
+diff -ruN a/drivers/scsi/.gitignore b/drivers/scsi/.gitignore
+--- a/drivers/scsi/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/drivers/scsi/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++53c700_d.h
+diff -ruN a/drivers/tty/vt/.gitignore b/drivers/tty/vt/.gitignore
+--- a/drivers/tty/vt/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/drivers/tty/vt/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++consolemap_deftbl.c
++defkeymap.c
+diff -ruN a/drivers/video/logo/.gitignore b/drivers/video/logo/.gitignore
+--- a/drivers/video/logo/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/drivers/video/logo/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,7 @@
++#
++# Generated files
++#
++*_mono.c
++*_vga16.c
++*_clut224.c
++*_gray256.c
+diff -ruN a/drivers/zorro/.gitignore b/drivers/zorro/.gitignore
+--- a/drivers/zorro/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/drivers/zorro/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++devlist.h
++gen-devlist
+diff -ruN a/firmware/cis/.gitignore b/firmware/cis/.gitignore
+--- a/firmware/cis/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/firmware/cis/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++*.cis
+diff -ruN a/firmware/.gitignore b/firmware/.gitignore
+--- a/firmware/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/firmware/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,6 @@
++*.gen.S
++*.fw
++*.bin
++*.csp
++*.dsp
++ihex2fw
+diff -ruN a/.gitignore b/.gitignore
+--- a/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,81 @@
++#
++# NOTE! Don't add files that are generated in specific
++# subdirectories here. Add them in the ".gitignore" file
++# in that subdirectory instead.
++#
++# NOTE! Please use 'git ls-files -i --exclude-standard'
++# command after changing this file, to see if there are
++# any tracked files which get ignored after the change.
++#
++# Normal rules
++#
++.*
++*.o
++*.o.*
++*.a
++*.s
++*.ko
++*.so
++*.so.dbg
++*.mod.c
++*.i
++*.lst
++*.symtypes
++*.order
++modules.builtin
++*.elf
++*.bin
++*.gz
++*.bz2
++*.lzma
++*.xz
++*.lzo
++*.patch
++*.gcno
++
++#
++# Top-level generic files
++#
++/tags
++/TAGS
++/linux
++/vmlinux
++/vmlinuz
++/System.map
++/Module.markers
++/Module.symvers
++
++#
++# git files that we don't want to ignore even it they are dot-files
++#
++!.gitignore
++!.mailmap
++
++#
++# Generated include files
++#
++include/config
++include/linux/version.h
++include/generated
++arch/*/include/generated
++
++# stgit generated dirs
++patches-*
++
++# quilt's files
++patches
++series
++
++# cscope files
++cscope.*
++ncscope.*
++
++# gnu global files
++GPATH
++GRTAGS
++GSYMS
++GTAGS
++
++*.orig
++*~
++\#*#
+diff -ruN a/kernel/debug/kdb/.gitignore b/kernel/debug/kdb/.gitignore
+--- a/kernel/debug/kdb/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/kernel/debug/kdb/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++gen-kdb_cmds.c
+diff -ruN a/kernel/.gitignore b/kernel/.gitignore
+--- a/kernel/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/kernel/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,6 @@
++#
++# Generated files
++#
++config_data.h
++config_data.gz
++timeconst.h
+diff -ruN a/lib/.gitignore b/lib/.gitignore
+--- a/lib/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/lib/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,6 @@
++#
++# Generated files
++#
++gen_crc32table
++crc32table.h
++
+diff -ruN a/lib/raid6/.gitignore b/lib/raid6/.gitignore
+--- a/lib/raid6/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/lib/raid6/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,4 @@
++mktables
++altivec*.c
++int*.c
++tables.c
+diff -ruN a/net/wireless/.gitignore b/net/wireless/.gitignore
+--- a/net/wireless/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/net/wireless/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++regdb.c
+diff -ruN a/scripts/basic/.gitignore b/scripts/basic/.gitignore
+--- a/scripts/basic/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/scripts/basic/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++fixdep
+diff -ruN a/scripts/dtc/.gitignore b/scripts/dtc/.gitignore
+--- a/scripts/dtc/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/scripts/dtc/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,5 @@
++dtc
++dtc-lexer.lex.c
++dtc-parser.tab.c
++dtc-parser.tab.h
++
+diff -ruN a/scripts/genksyms/.gitignore b/scripts/genksyms/.gitignore
+--- a/scripts/genksyms/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/scripts/genksyms/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,4 @@
++keywords.c
++lex.c
++parse.[ch]
++genksyms
+diff -ruN a/scripts/.gitignore b/scripts/.gitignore
+--- a/scripts/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/scripts/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,11 @@
++#
++# Generated files
++#
++conmakehash
++kallsyms
++pnmtologo
++bin2c
++unifdef
++ihex2fw
++recordmcount
++docproc
+diff -ruN a/scripts/kconfig/.gitignore b/scripts/kconfig/.gitignore
+--- a/scripts/kconfig/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/scripts/kconfig/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,23 @@
++#
++# Generated files
++#
++config*
++lex.*.c
++*.tab.c
++*.tab.h
++zconf.hash.c
++*.moc
++lkc_defs.h
++gconf.glade.h
++*.pot
++*.mo
++
++#
++# configuration programs
++#
++conf
++mconf
++nconf
++qconf
++gconf
++kxgettext
+diff -ruN a/scripts/kconfig/lxdialog/.gitignore b/scripts/kconfig/lxdialog/.gitignore
+--- a/scripts/kconfig/lxdialog/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/scripts/kconfig/lxdialog/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,4 @@
++#
++# Generated files
++#
++lxdialog
+diff -ruN a/scripts/mod/.gitignore b/scripts/mod/.gitignore
+--- a/scripts/mod/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/scripts/mod/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,4 @@
++elfconfig.h
++mk_elfconfig
++modpost
++
+diff -ruN a/scripts/selinux/genheaders/.gitignore b/scripts/selinux/genheaders/.gitignore
+--- a/scripts/selinux/genheaders/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/scripts/selinux/genheaders/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1 @@
++genheaders
+diff -ruN a/scripts/selinux/mdp/.gitignore b/scripts/selinux/mdp/.gitignore
+--- a/scripts/selinux/mdp/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/scripts/selinux/mdp/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++# Generated file
++mdp
+diff -ruN a/security/apparmor/.gitignore b/security/apparmor/.gitignore
+--- a/security/apparmor/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/security/apparmor/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,6 @@
++#
++# Generated include files
++#
++af_names.h
++capability_names.h
++rlim_names.h
+diff -ruN a/security/selinux/.gitignore b/security/selinux/.gitignore
+--- a/security/selinux/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/security/selinux/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,2 @@
++av_permissions.h
++flask.h
+diff -ruN a/sound/oss/.gitignore b/sound/oss/.gitignore
+--- a/sound/oss/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/sound/oss/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,4 @@
++#Ignore generated files
++maui_boot.h
++pss_boot.h
++trix_boot.h
+diff -ruN a/tools/perf/.gitignore b/tools/perf/.gitignore
+--- a/tools/perf/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/tools/perf/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,21 @@
++PERF-CFLAGS
++PERF-GUI-VARS
++PERF-VERSION-FILE
++perf
++perf-help
++perf-record
++perf-report
++perf-stat
++perf-top
++perf*.1
++perf*.xml
++perf*.html
++common-cmds.h
++perf.data
++perf.data.old
++perf-archive
++tags
++TAGS
++cscope*
++config.mak
++config.mak.autogen
+diff -ruN a/usr/.gitignore b/usr/.gitignore
+--- a/usr/.gitignore	1970-01-01 01:00:00.000000000 +0100
++++ b/usr/.gitignore	2012-06-21 08:13:28.000000000 +0200
+@@ -0,0 +1,10 @@
++#
++# Generated files
++#
++gen_init_cpio
++initramfs_data.cpio
++initramfs_data.cpio.gz
++initramfs_data.cpio.bz2
++initramfs_data.cpio.lzma
++initramfs_list
++include
