@@ -1,6 +1,6 @@
 /*
    BlueZ - Bluetooth protocol stack for Linux
-   Copyright (C) 2000-2001 Qualcomm Incorporated
+   Copyright (c) 2000-2001, 2010-2012 The Linux Foundation.  All rights reserved.
    Copyright (C) 2009-2010 Gustavo F. Padovan <gustavo@padovan.org>
    Copyright (C) 2010 Google Inc.
 
@@ -660,15 +660,8 @@ static inline void l2cap_send_sframe(struct l2cap_chan *chan, u16 control)
 	if (!skb)
 		return;
 
-	lh = (struct l2cap_hdr *) skb_put(skb, L2CAP_HDR_SIZE);
-	lh->len = cpu_to_le16(hlen - L2CAP_HDR_SIZE);
-	lh->cid = cpu_to_le16(chan->dcid);
-	put_unaligned_le16(control, skb_put(skb, 2));
-
-	if (chan->fcs == L2CAP_FCS_CRC16) {
-		u16 fcs = crc16(0, (u8 *)lh, count - 2);
-		put_unaligned_le16(fcs, skb_put(skb, 2));
-	}
+	if (conn->hcon == NULL || conn->hcon->hdev == NULL)
+		return;
 
 	if (lmp_no_flush_capable(conn->hcon->hdev))
 		flags = ACL_START_NO_FLUSH;
@@ -2032,9 +2025,1915 @@ done:
 		rfc.monitor_timeout = 0;
 		rfc.max_pdu_size    = 0;
 
+	if (skb_queue_empty(queue))
+		return 0;
+
+	memset(&msg, 0, sizeof(msg));
+	msg.msg_iov = (struct iovec *) &iv;
+
+	buflen = pi->omtu + L2CAP_FCS_SIZE;
+	buf = kzalloc(buflen, GFP_TEMPORARY);
+
+	if (!buf) {
+		BT_DBG("Could not allocate resegmentation buffer");
+		return -ENOMEM;
+	}
+
+	/* Move current frames off the original queue */
+	__skb_queue_head_init(&old_frames);
+	skb_queue_splice_tail_init(queue, &old_frames);
+
+	while (!skb_queue_empty(&old_frames)) {
+		struct sk_buff_head current_sdu;
+		u8 original_sar;
+
+		/* Reassemble each SDU from one or more PDUs */
+
+		iv.iov_base = buf;
+		iv.iov_len = 0;
+
+		skb = skb_peek(&old_frames);
+		original_sar = bt_cb(skb)->control.sar;
+
+		__skb_unlink(skb, &old_frames);
+
+		/* Append data to SDU */
+		if (pi->extended_control)
+			skb_pull(skb, L2CAP_EXTENDED_HDR_SIZE);
+		else
+			skb_pull(skb, L2CAP_ENHANCED_HDR_SIZE);
+
+		if (original_sar == L2CAP_SAR_START)
+			skb_pull(skb, L2CAP_SDULEN_SIZE);
+
+		err = l2cap_skbuff_to_kvec(skb, &iv, buflen);
+
+		if (bt_cb(skb)->control.fcs == L2CAP_FCS_CRC16)
+			iv.iov_len -= L2CAP_FCS_SIZE;
+
+		/* Free skb */
+		kfree_skb(skb);
+
+		if (err)
+			break;
+
+		while (!skb_queue_empty(&old_frames) && !err) {
+			/* Check next frame */
+			skb = skb_peek(&old_frames);
+
+			if (is_initial_frame(bt_cb(skb)->control.sar))
+				break;
+
+			__skb_unlink(skb, &old_frames);
+
+			/* Append data to SDU */
+			if (pi->extended_control)
+				skb_pull(skb, L2CAP_EXTENDED_HDR_SIZE);
+			else
+				skb_pull(skb, L2CAP_ENHANCED_HDR_SIZE);
+
+			if (bt_cb(skb)->control.sar == L2CAP_SAR_START)
+				skb_pull(skb, L2CAP_SDULEN_SIZE);
+
+			err = l2cap_skbuff_to_kvec(skb, &iv, buflen);
+
+			if (bt_cb(skb)->control.fcs == L2CAP_FCS_CRC16)
+				iv.iov_len -= L2CAP_FCS_SIZE;
+
+			/* Free skb */
+			kfree_skb(skb);
+		}
+
+		if (err)
+			break;
+
+		/* Segment data */
+
+		__skb_queue_head_init(&current_sdu);
+
+		/* skbs for the SDU were just freed, but the
+		 * resegmenting process could produce more, smaller
+		 * skbs due to smaller PDUs and reduced HCI MTU.  The
+		 * overhead from the sk_buff structs could put us over
+		 * the sk_sndbuf limit.
+		 *
+		 * Since this code is running in response to a
+		 * received poll/final packet, it cannot block.
+		 * Therefore, memory allocation needs to be allowed by
+		 * falling back to bt_skb_alloc() (with
+		 * skb_set_owner_w() to maintain sk_wmem_alloc
+		 * correctly).
+		 */
+		msg.msg_iovlen = iv.iov_len;
+		err = l2cap_segment_sdu(sk, &current_sdu, &msg,
+					msg.msg_iovlen, 1);
+
+		if (err || skb_queue_empty(&current_sdu)) {
+			BT_DBG("Error %d resegmenting data for socket %p",
+				err, sk);
+			__skb_queue_purge(&current_sdu);
+			break;
+		}
+
+		/* Fix up first PDU SAR bits */
+		if (!is_initial_frame(original_sar)) {
+			BT_DBG("Changing SAR bits, %d PDUs",
+				skb_queue_len(&current_sdu));
+			skb = skb_peek(&current_sdu);
+
+			if (skb_queue_len(&current_sdu) == 1) {
+				/* Change SAR from 'unsegmented' to 'end' */
+				bt_cb(skb)->control.sar = L2CAP_SAR_END;
+			} else {
+				struct l2cap_hdr *lh;
+				size_t hdrlen;
+
+				/* Change SAR from 'start' to 'continue' */
+				bt_cb(skb)->control.sar = L2CAP_SAR_CONTINUE;
+
+				/* Start frames contain 2 bytes for
+				 * sdulen and continue frames don't.
+				 * Must rewrite header to eliminate
+				 * sdulen and then adjust l2cap frame
+				 * length.
+				 */
+				if (pi->extended_control)
+					hdrlen = L2CAP_EXTENDED_HDR_SIZE;
+				else
+					hdrlen = L2CAP_ENHANCED_HDR_SIZE;
+
+				memmove(skb->data + L2CAP_SDULEN_SIZE,
+					skb->data, hdrlen);
+				skb_pull(skb, L2CAP_SDULEN_SIZE);
+				lh = (struct l2cap_hdr *)skb->data;
+				lh->len = cpu_to_le16(le16_to_cpu(lh->len) -
+							L2CAP_SDULEN_SIZE);
+			}
+		}
+
+		/* Add to queue */
+		skb_queue_splice_tail(&current_sdu, queue);
+	}
+
+	__skb_queue_purge(&old_frames);
+	if (err)
+		__skb_queue_purge(queue);
+
+	kfree(buf);
+
+	BT_DBG("Queue resegmented, err=%d", err);
+	return err;
+}
+
+static void l2cap_resegment_worker(struct work_struct *work)
+{
+	int err = 0;
+	struct l2cap_resegment_work *seg_work =
+		container_of(work, struct l2cap_resegment_work, work);
+	struct sock *sk = seg_work->sk;
+
+	kfree(seg_work);
+
+	BT_DBG("sk %p", sk);
+	lock_sock(sk);
+
+	if (l2cap_pi(sk)->amp_move_state != L2CAP_AMP_STATE_RESEGMENT) {
+		release_sock(sk);
+		sock_put(sk);
+		return;
+	}
+
+	err = l2cap_resegment_queue(sk, TX_QUEUE(sk));
+
+	l2cap_pi(sk)->amp_move_state = L2CAP_AMP_STATE_STABLE;
+
+	if (skb_queue_empty(TX_QUEUE(sk)))
+		sk->sk_send_head = NULL;
+	else
+		sk->sk_send_head = skb_peek(TX_QUEUE(sk));
+
+	if (err)
+		l2cap_send_disconn_req(l2cap_pi(sk)->conn, sk, ECONNRESET);
+	else
+		l2cap_ertm_send(sk);
+
+	release_sock(sk);
+	sock_put(sk);
+}
+
+static int l2cap_setup_resegment(struct sock *sk)
+{
+	struct l2cap_resegment_work *seg_work;
+
+	BT_DBG("sk %p", sk);
+
+	if (skb_queue_empty(TX_QUEUE(sk)))
+		return 0;
+
+	seg_work = kzalloc(sizeof(*seg_work), GFP_ATOMIC);
+	if (!seg_work)
+		return -ENOMEM;
+
+	INIT_WORK(&seg_work->work, l2cap_resegment_worker);
+	sock_hold(sk);
+	seg_work->sk = sk;
+
+	if (!queue_work(_l2cap_wq, &seg_work->work)) {
+		kfree(seg_work);
+		sock_put(sk);
+		return -ENOMEM;
+	}
+
+	l2cap_pi(sk)->amp_move_state = L2CAP_AMP_STATE_RESEGMENT;
+
+	return 0;
+}
+
+static inline int l2cap_rmem_available(struct sock *sk)
+{
+	BT_DBG("sk_rmem_alloc %d, sk_rcvbuf %d",
+		atomic_read(&sk->sk_rmem_alloc), sk->sk_rcvbuf);
+	return atomic_read(&sk->sk_rmem_alloc) < sk->sk_rcvbuf / 3;
+}
+
+static inline int l2cap_rmem_full(struct sock *sk)
+{
+	BT_DBG("sk_rmem_alloc %d, sk_rcvbuf %d",
+		atomic_read(&sk->sk_rmem_alloc), sk->sk_rcvbuf);
+	return atomic_read(&sk->sk_rmem_alloc) > (2 * sk->sk_rcvbuf) / 3;
+}
+
+void l2cap_amp_move_init(struct sock *sk)
+{
+	BT_DBG("sk %p", sk);
+
+	if (!l2cap_pi(sk)->conn)
+		return;
+
+	if (!(l2cap_pi(sk)->conn->fc_mask & L2CAP_FC_A2MP))
+		return;
+
+	if (l2cap_pi(sk)->amp_id == 0) {
+		if (l2cap_pi(sk)->amp_pref != BT_AMP_POLICY_PREFER_AMP)
+			return;
+		l2cap_pi(sk)->amp_move_role = L2CAP_AMP_MOVE_INITIATOR;
+		l2cap_pi(sk)->amp_move_state = L2CAP_AMP_STATE_WAIT_PREPARE;
+		amp_create_physical(l2cap_pi(sk)->conn, sk);
+	} else {
+		l2cap_pi(sk)->amp_move_role = L2CAP_AMP_MOVE_INITIATOR;
+		l2cap_pi(sk)->amp_move_state =
+					L2CAP_AMP_STATE_WAIT_MOVE_RSP_SUCCESS;
+		l2cap_pi(sk)->amp_move_id = 0;
+		l2cap_amp_move_setup(sk);
+		l2cap_send_move_chan_req(l2cap_pi(sk)->conn,
+					l2cap_pi(sk), l2cap_pi(sk)->scid, 0);
+		l2cap_sock_set_timer(sk, L2CAP_MOVE_TIMEOUT);
+	}
+}
+
+static void l2cap_chan_ready(struct sock *sk)
+{
+	struct sock *parent = bt_sk(sk)->parent;
+
+	BT_DBG("sk %p, parent %p", sk, parent);
+
+	l2cap_pi(sk)->conf_state = 0;
+	l2cap_sock_clear_timer(sk);
+
+	if (!parent) {
+		/* Outgoing channel.
+		 * Wake up socket sleeping on connect.
+		 */
+		sk->sk_state = BT_CONNECTED;
+		sk->sk_state_change(sk);
+	} else {
+		/* Incoming channel.
+		 * Wake up socket sleeping on accept.
+		 */
+		parent->sk_data_ready(parent, 0);
+	}
+}
+
+/* Copy frame to all raw sockets on that connection */
+static void l2cap_raw_recv(struct l2cap_conn *conn, struct sk_buff *skb)
+{
+	struct l2cap_chan_list *l = &conn->chan_list;
+	struct sk_buff *nskb;
+	struct sock *sk;
+
+	BT_DBG("conn %p", conn);
+
+	read_lock(&l->lock);
+	for (sk = l->head; sk; sk = l2cap_pi(sk)->next_c) {
+		if (sk->sk_type != SOCK_RAW)
+			continue;
+
+		/* Don't send frame to the socket it came from */
+		if (skb->sk == sk)
+			continue;
+		nskb = skb_clone(skb, GFP_ATOMIC);
+		if (!nskb)
+			continue;
+
+		if (sock_queue_rcv_skb(sk, nskb))
+			kfree_skb(nskb);
+	}
+	read_unlock(&l->lock);
+}
+
+/* ---- L2CAP signalling commands ---- */
+static struct sk_buff *l2cap_build_cmd(struct l2cap_conn *conn,
+				u8 code, u8 ident, u16 dlen, void *data)
+{
+	struct sk_buff *skb, **frag;
+	struct l2cap_cmd_hdr *cmd;
+	struct l2cap_hdr *lh;
+	int len, count;
+	unsigned int mtu = conn->hcon->hdev->acl_mtu;
+
+	BT_DBG("conn %p, code 0x%2.2x, ident 0x%2.2x, len %d",
+			conn, code, ident, dlen);
+
+	len = L2CAP_HDR_SIZE + L2CAP_CMD_HDR_SIZE + dlen;
+	count = min_t(unsigned int, mtu, len);
+
+	skb = bt_skb_alloc(count, GFP_ATOMIC);
+	if (!skb)
+		return NULL;
+
+	lh = (struct l2cap_hdr *) skb_put(skb, L2CAP_HDR_SIZE);
+	lh->len = cpu_to_le16(L2CAP_CMD_HDR_SIZE + dlen);
+
+	if (conn->hcon->type == LE_LINK)
+		lh->cid = cpu_to_le16(L2CAP_CID_LE_SIGNALING);
+	else
+		lh->cid = cpu_to_le16(L2CAP_CID_SIGNALING);
+
+	cmd = (struct l2cap_cmd_hdr *) skb_put(skb, L2CAP_CMD_HDR_SIZE);
+	cmd->code  = code;
+	cmd->ident = ident;
+	cmd->len   = cpu_to_le16(dlen);
+
+	if (dlen) {
+		count -= L2CAP_HDR_SIZE + L2CAP_CMD_HDR_SIZE;
+		memcpy(skb_put(skb, count), data, count);
+		data += count;
+	}
+
+	len -= skb->len;
+
+	/* Continuation fragments (no L2CAP header) */
+	frag = &skb_shinfo(skb)->frag_list;
+	while (len) {
+		count = min_t(unsigned int, mtu, len);
+
+		*frag = bt_skb_alloc(count, GFP_ATOMIC);
+		if (!*frag)
+			goto fail;
+
+		memcpy(skb_put(*frag, count), data, count);
+
+		len  -= count;
+		data += count;
+
+		frag = &(*frag)->next;
+	}
+
+	return skb;
+
+fail:
+	kfree_skb(skb);
+	return NULL;
+}
+
+static inline int l2cap_get_conf_opt(void **ptr, int *type, int *olen, unsigned long *val)
+{
+	struct l2cap_conf_opt *opt = *ptr;
+	int len;
+
+	len = L2CAP_CONF_OPT_SIZE + opt->len;
+	*ptr += len;
+
+	*type = opt->type;
+	*olen = opt->len;
+
+	switch (opt->len) {
+	case 1:
+		*val = *((u8 *) opt->val);
+		break;
+
+	case 2:
+		*val = get_unaligned_le16(opt->val);
+		break;
+
+	case 4:
+		*val = get_unaligned_le32(opt->val);
+		break;
+
+	default:
+		*val = (unsigned long) opt->val;
+		break;
+	}
+
+	BT_DBG("type 0x%2.2x len %d val 0x%lx", *type, opt->len, *val);
+	return len;
+}
+
+static void l2cap_add_conf_opt(void **ptr, u8 type, u8 len, unsigned long val)
+{
+	struct l2cap_conf_opt *opt = *ptr;
+
+	BT_DBG("type 0x%2.2x len %d val 0x%lx", type, len, val);
+
+	opt->type = type;
+	opt->len  = len;
+
+	switch (len) {
+	case 1:
+		*((u8 *) opt->val)  = val;
+		break;
+
+	case 2:
+		put_unaligned_le16(val, opt->val);
+		break;
+
+	case 4:
+		put_unaligned_le32(val, opt->val);
+		break;
+
+	default:
+		memcpy(opt->val, (void *) val, len);
+		break;
+	}
+
+	*ptr += L2CAP_CONF_OPT_SIZE + len;
+}
+
+static void l2cap_ertm_ack_timeout(struct work_struct *work)
+{
+	struct delayed_work *delayed =
+		container_of(work, struct delayed_work, work);
+	struct l2cap_pinfo *pi =
+		container_of(delayed, struct l2cap_pinfo, ack_work);
+	struct sock *sk = (struct sock *)pi;
+	u16 frames_to_ack;
+
+	BT_DBG("sk %p", sk);
+
+	if (!sk)
+		return;
+
+	lock_sock(sk);
+
+	if (!l2cap_pi(sk)->conn) {
+		release_sock(sk);
+		return;
+	}
+
+	frames_to_ack = __delta_seq(l2cap_pi(sk)->buffer_seq,
+				    l2cap_pi(sk)->last_acked_seq,
+				    l2cap_pi(sk));
+
+	if (frames_to_ack)
+		l2cap_ertm_send_rr_or_rnr(sk, 0);
+
+	release_sock(sk);
+}
+
+static void l2cap_ertm_retrans_timeout(struct work_struct *work)
+{
+	struct delayed_work *delayed =
+		container_of(work, struct delayed_work, work);
+	struct l2cap_pinfo *pi =
+		container_of(delayed, struct l2cap_pinfo, retrans_work);
+	struct sock *sk = (struct sock *)pi;
+
+	BT_DBG("sk %p", sk);
+
+	if (!sk)
+		return;
+
+	lock_sock(sk);
+
+	if (!l2cap_pi(sk)->conn) {
+		release_sock(sk);
+		return;
+	}
+
+	l2cap_ertm_tx(sk, 0, 0, L2CAP_ERTM_EVENT_RETRANS_TIMER_EXPIRES);
+	release_sock(sk);
+}
+
+static void l2cap_ertm_monitor_timeout(struct work_struct *work)
+{
+	struct delayed_work *delayed =
+		container_of(work, struct delayed_work, work);
+	struct l2cap_pinfo *pi =
+		container_of(delayed, struct l2cap_pinfo, monitor_work);
+	struct sock *sk = (struct sock *)pi;
+
+	BT_DBG("sk %p", sk);
+
+	if (!sk)
+		return;
+
+	lock_sock(sk);
+
+	if (!l2cap_pi(sk)->conn) {
+		release_sock(sk);
+		return;
+	}
+
+	l2cap_ertm_tx(sk, 0, 0, L2CAP_ERTM_EVENT_MONITOR_TIMER_EXPIRES);
+
+	release_sock(sk);
+}
+
+static inline void l2cap_ertm_init(struct sock *sk)
+{
+	l2cap_pi(sk)->next_tx_seq = 0;
+	l2cap_pi(sk)->expected_tx_seq = 0;
+	l2cap_pi(sk)->expected_ack_seq = 0;
+	l2cap_pi(sk)->unacked_frames = 0;
+	l2cap_pi(sk)->buffer_seq = 0;
+	l2cap_pi(sk)->frames_sent = 0;
+	l2cap_pi(sk)->last_acked_seq = 0;
+	l2cap_pi(sk)->sdu = NULL;
+	l2cap_pi(sk)->sdu_last_frag = NULL;
+	l2cap_pi(sk)->sdu_len = 0;
+	atomic_set(&l2cap_pi(sk)->ertm_queued, 0);
+
+	l2cap_pi(sk)->rx_state = L2CAP_ERTM_RX_STATE_RECV;
+	l2cap_pi(sk)->tx_state = L2CAP_ERTM_TX_STATE_XMIT;
+
+	BT_DBG("tx_state 0x2.2%x rx_state 0x2.2%x", l2cap_pi(sk)->tx_state,
+		l2cap_pi(sk)->rx_state);
+
+	l2cap_pi(sk)->amp_id = 0;
+	l2cap_pi(sk)->amp_move_state = L2CAP_AMP_STATE_STABLE;
+	l2cap_pi(sk)->amp_move_role = L2CAP_AMP_MOVE_NONE;
+	l2cap_pi(sk)->amp_move_reqseq = 0;
+	l2cap_pi(sk)->amp_move_event = 0;
+
+	INIT_DELAYED_WORK(&l2cap_pi(sk)->ack_work, l2cap_ertm_ack_timeout);
+	INIT_DELAYED_WORK(&l2cap_pi(sk)->retrans_work,
+			l2cap_ertm_retrans_timeout);
+	INIT_DELAYED_WORK(&l2cap_pi(sk)->monitor_work,
+			l2cap_ertm_monitor_timeout);
+	INIT_WORK(&l2cap_pi(sk)->tx_work, l2cap_ertm_tx_worker);
+	skb_queue_head_init(SREJ_QUEUE(sk));
+	skb_queue_head_init(TX_QUEUE(sk));
+
+	l2cap_seq_list_init(&l2cap_pi(sk)->srej_list, l2cap_pi(sk)->tx_win);
+	l2cap_seq_list_init(&l2cap_pi(sk)->retrans_list,
+			l2cap_pi(sk)->remote_tx_win);
+}
+
+void l2cap_ertm_destruct(struct sock *sk)
+{
+	l2cap_seq_list_free(&l2cap_pi(sk)->srej_list);
+	l2cap_seq_list_free(&l2cap_pi(sk)->retrans_list);
+}
+
+void l2cap_ertm_shutdown(struct sock *sk)
+{
+	l2cap_ertm_stop_ack_timer(l2cap_pi(sk));
+	l2cap_ertm_stop_retrans_timer(l2cap_pi(sk));
+	l2cap_ertm_stop_monitor_timer(l2cap_pi(sk));
+}
+
+void l2cap_ertm_recv_done(struct sock *sk)
+{
+	lock_sock(sk);
+
+	if (l2cap_pi(sk)->mode != L2CAP_MODE_ERTM ||
+			sk->sk_state != BT_CONNECTED) {
+		release_sock(sk);
+		return;
+	}
+
+	/* Consume any queued incoming frames and update local busy status */
+	if (l2cap_pi(sk)->rx_state == L2CAP_ERTM_RX_STATE_SREJ_SENT &&
+			l2cap_ertm_rx_queued_iframes(sk))
+		l2cap_send_disconn_req(l2cap_pi(sk)->conn, sk, ECONNRESET);
+	else if ((l2cap_pi(sk)->conn_state & L2CAP_CONN_LOCAL_BUSY) &&
+			l2cap_rmem_available(sk))
+		l2cap_ertm_tx(sk, 0, 0, L2CAP_ERTM_EVENT_LOCAL_BUSY_CLEAR);
+
+	release_sock(sk);
+}
+
+static inline __u8 l2cap_select_mode(__u8 mode, __u16 remote_feat_mask)
+{
+	switch (mode) {
+	case L2CAP_MODE_STREAMING:
+	case L2CAP_MODE_ERTM:
+		if (l2cap_mode_supported(mode, remote_feat_mask))
+			return mode;
+		/* fall through */
+	default:
+		return L2CAP_MODE_BASIC;
+	}
+}
+
+static void l2cap_setup_txwin(struct l2cap_pinfo *pi)
+{
+	if (pi->tx_win > L2CAP_TX_WIN_MAX_ENHANCED &&
+		(pi->conn->feat_mask & L2CAP_FEAT_EXT_WINDOW)) {
+		pi->tx_win_max = L2CAP_TX_WIN_MAX_EXTENDED;
+		pi->extended_control = 1;
+	} else {
+		if (pi->tx_win > L2CAP_TX_WIN_MAX_ENHANCED)
+			pi->tx_win = L2CAP_TX_WIN_MAX_ENHANCED;
+
+		pi->tx_win_max = L2CAP_TX_WIN_MAX_ENHANCED;
+		pi->extended_control = 0;
+	}
+}
+
+static void l2cap_aggregate_fs(struct hci_ext_fs *cur,
+		struct hci_ext_fs *new,
+		struct hci_ext_fs *agg)
+{
+	*agg = *cur;
+	if ((cur->max_sdu != 0xFFFF) && (cur->sdu_arr_time != 0xFFFFFFFF)) {
+		/* current flow spec has known rate */
+		if ((new->max_sdu == 0xFFFF) ||
+				(new->sdu_arr_time == 0xFFFFFFFF)) {
+			/* new fs has unknown rate, so aggregate is unknown */
+			agg->max_sdu = 0xFFFF;
+			agg->sdu_arr_time = 0xFFFFFFFF;
+		} else {
+			/* new fs has known rate, so aggregate is known */
+			u64 cur_rate;
+			u64 new_rate;
+			cur_rate = cur->max_sdu * 1000000ULL;
+			if (cur->sdu_arr_time)
+				cur_rate = div_u64(cur_rate, cur->sdu_arr_time);
+			new_rate = new->max_sdu * 1000000ULL;
+			if (new->sdu_arr_time)
+				new_rate = div_u64(new_rate, new->sdu_arr_time);
+			cur_rate = cur_rate + new_rate;
+			if (cur_rate)
+				agg->sdu_arr_time = div64_u64(
+					agg->max_sdu * 1000000ULL, cur_rate);
+		}
+	}
+}
+
+static int l2cap_aggregate(struct hci_chan *chan, struct l2cap_pinfo *pi)
+{
+	struct hci_ext_fs tx_fs;
+	struct hci_ext_fs rx_fs;
+
+	BT_DBG("chan %p", chan);
+
+	if (((chan->tx_fs.max_sdu == 0xFFFF) ||
+			(chan->tx_fs.sdu_arr_time == 0xFFFFFFFF)) &&
+			((chan->rx_fs.max_sdu == 0xFFFF) ||
+			(chan->rx_fs.sdu_arr_time == 0xFFFFFFFF)))
+		return 0;
+
+	l2cap_aggregate_fs(&chan->tx_fs,
+				(struct hci_ext_fs *) &pi->local_fs, &tx_fs);
+	l2cap_aggregate_fs(&chan->rx_fs,
+				(struct hci_ext_fs *) &pi->remote_fs, &rx_fs);
+	hci_chan_modify(chan, &tx_fs, &rx_fs);
+	return 1;
+}
+
+static void l2cap_deaggregate_fs(struct hci_ext_fs *cur,
+		struct hci_ext_fs *old,
+		struct hci_ext_fs *agg)
+{
+	*agg = *cur;
+	if ((cur->max_sdu != 0xFFFF) && (cur->sdu_arr_time != 0xFFFFFFFF)) {
+		u64 cur_rate;
+		u64 old_rate;
+		cur_rate = cur->max_sdu * 1000000ULL;
+		if (cur->sdu_arr_time)
+			cur_rate = div_u64(cur_rate, cur->sdu_arr_time);
+		old_rate = old->max_sdu * 1000000ULL;
+		if (old->sdu_arr_time)
+			old_rate = div_u64(old_rate, old->sdu_arr_time);
+		cur_rate = cur_rate - old_rate;
+		if (cur_rate)
+			agg->sdu_arr_time = div64_u64(
+				agg->max_sdu * 1000000ULL, cur_rate);
+	}
+}
+
+static int l2cap_deaggregate(struct hci_chan *chan, struct l2cap_pinfo *pi)
+{
+	struct hci_ext_fs tx_fs;
+	struct hci_ext_fs rx_fs;
+
+	BT_DBG("chan %p", chan);
+
+	if (((chan->tx_fs.max_sdu == 0xFFFF) ||
+			(chan->tx_fs.sdu_arr_time == 0xFFFFFFFF)) &&
+			((chan->rx_fs.max_sdu == 0xFFFF) ||
+			(chan->rx_fs.sdu_arr_time == 0xFFFFFFFF)))
+		return 0;
+
+	l2cap_deaggregate_fs(&chan->tx_fs,
+				(struct hci_ext_fs *) &pi->local_fs, &tx_fs);
+	l2cap_deaggregate_fs(&chan->rx_fs,
+				(struct hci_ext_fs *) &pi->remote_fs, &rx_fs);
+	hci_chan_modify(chan, &tx_fs, &rx_fs);
+	return 1;
+}
+
+static struct hci_chan *l2cap_chan_admit(u8 amp_id, struct sock *sk)
+{
+	struct l2cap_pinfo *pi = l2cap_pi(sk);
+	struct hci_dev *hdev;
+	struct hci_conn *hcon;
+	struct hci_chan *chan;
+
+	hdev = hci_dev_get(amp_id);
+	if (!hdev)
+		return NULL;
+
+	BT_DBG("hdev %s", hdev->name);
+
+	hcon = hci_conn_hash_lookup_ba(hdev, ACL_LINK, pi->conn->dst);
+	if (!hcon) {
+		chan = NULL;
+		goto done;
+	}
+
+	chan = hci_chan_list_lookup_id(hdev, hcon->handle);
+	if (chan) {
+		l2cap_aggregate(chan, pi);
+		sock_hold(sk);
+		chan->l2cap_sk = sk;
+		hci_chan_hold(chan);
+		pi->ampchan = chan;
+		goto done;
+	}
+
+	chan = hci_chan_add(hdev);
+	if (chan) {
+		chan->conn = hcon;
+		sock_hold(sk);
+		chan->l2cap_sk = sk;
+		hci_chan_hold(chan);
+		pi->ampchan = chan;
+		hci_chan_create(chan,
+			(struct hci_ext_fs *) &pi->local_fs,
+			(struct hci_ext_fs *) &pi->remote_fs);
+	}
+done:
+	hci_dev_put(hdev);
+	return chan;
+}
+
+static void l2cap_get_ertm_timeouts(struct l2cap_conf_rfc *rfc,
+						struct l2cap_pinfo *pi)
+{
+	if (pi->amp_id && pi->ampcon) {
+		u64 ertm_to = pi->ampcon->hdev->amp_be_flush_to;
+
+		/* Class 1 devices have must have ERTM timeouts
+		 * exceeding the Link Supervision Timeout.  The
+		 * default Link Supervision Timeout for AMP
+		 * controllers is 10 seconds.
+		 *
+		 * Class 1 devices use 0xffffffff for their
+		 * best-effort flush timeout, so the clamping logic
+		 * will result in a timeout that meets the above
+		 * requirement.  ERTM timeouts are 16-bit values, so
+		 * the maximum timeout is 65.535 seconds.
+		 */
+
+		/* Convert timeout to milliseconds and round */
+		ertm_to = div_u64(ertm_to + 999, 1000);
+
+		/* This is the recommended formula for class 2 devices
+		 * that start ERTM timers when packets are sent to the
+		 * controller.
+		 */
+		ertm_to = 3 * ertm_to + 500;
+
+		if (ertm_to > 0xffff)
+			ertm_to = 0xffff;
+
+		rfc->retrans_timeout = cpu_to_le16((u16) ertm_to);
+		rfc->monitor_timeout = rfc->retrans_timeout;
+	} else {
+		rfc->retrans_timeout = cpu_to_le16(L2CAP_DEFAULT_RETRANS_TO);
+		rfc->monitor_timeout = cpu_to_le16(L2CAP_DEFAULT_MONITOR_TO);
+	}
+}
+
+int l2cap_build_conf_req(struct sock *sk, void *data)
+{
+	struct l2cap_pinfo *pi = l2cap_pi(sk);
+	struct l2cap_conf_req *req = data;
+	struct l2cap_conf_rfc rfc = { .mode = pi->mode };
+	void *ptr = req->data;
+
+	BT_DBG("sk %p mode %d", sk, pi->mode);
+
+	if (pi->num_conf_req || pi->num_conf_rsp)
+		goto done;
+
+	switch (pi->mode) {
+	case L2CAP_MODE_STREAMING:
+	case L2CAP_MODE_ERTM:
+		if (pi->conf_state & L2CAP_CONF_STATE2_DEVICE)
+			break;
+
+		/* fall through */
+	default:
+		pi->mode = l2cap_select_mode(rfc.mode, pi->conn->feat_mask);
+		break;
+	}
+
+done:
+	if (pi->imtu != L2CAP_DEFAULT_MTU)
+		l2cap_add_conf_opt(&ptr, L2CAP_CONF_MTU, 2, pi->imtu);
+
+	switch (pi->mode) {
+	case L2CAP_MODE_BASIC:
+		if (!(pi->conn->feat_mask & L2CAP_FEAT_ERTM) &&
+				!(pi->conn->feat_mask & L2CAP_FEAT_STREAMING))
+			break;
+		rfc.txwin_size      = 0;
+		rfc.max_transmit    = 0;
+		rfc.retrans_timeout = 0;
+		rfc.monitor_timeout = 0;
+		rfc.max_pdu_size    = 0;
+
 		l2cap_add_conf_opt(&ptr, L2CAP_CONF_RFC, sizeof(rfc),
 							(unsigned long) &rfc);
 		break;
+
+	case L2CAP_MODE_ERTM:
+		l2cap_setup_txwin(pi);
+		if (pi->tx_win > L2CAP_TX_WIN_MAX_ENHANCED)
+			rfc.txwin_size = L2CAP_TX_WIN_MAX_ENHANCED;
+		else
+			rfc.txwin_size = pi->tx_win;
+		rfc.max_transmit = pi->max_tx;
+		rfc.max_pdu_size = cpu_to_le16(L2CAP_DEFAULT_MAX_PDU_SIZE);
+		l2cap_get_ertm_timeouts(&rfc, pi);
+
+		if (L2CAP_DEFAULT_MAX_PDU_SIZE > pi->imtu)
+			rfc.max_pdu_size = cpu_to_le16(pi->imtu);
+
+		l2cap_add_conf_opt(&ptr, L2CAP_CONF_RFC, sizeof(rfc),
+							(unsigned long) &rfc);
+
+		if ((pi->conn->feat_mask & L2CAP_FEAT_EXT_WINDOW) &&
+			pi->extended_control) {
+			l2cap_add_conf_opt(&ptr, L2CAP_CONF_EXT_WINDOW, 2,
+					pi->tx_win);
+		}
+
+		if (pi->amp_id) {
+			/* default best effort extended flow spec */
+			struct l2cap_conf_ext_fs fs = {1, 1, 0xFFFF,
+					0xFFFFFFFF, 0xFFFFFFFF, 0xFFFFFFFF};
+			l2cap_add_conf_opt(&ptr, L2CAP_CONF_EXT_FS,
+				sizeof(fs), (unsigned long) &fs);
+		}
+
+		if (!(pi->conn->feat_mask & L2CAP_FEAT_FCS))
+			break;
+
+		if (pi->fcs == L2CAP_FCS_NONE ||
+				pi->conf_state & L2CAP_CONF_NO_FCS_RECV) {
+			pi->fcs = L2CAP_FCS_NONE;
+			l2cap_add_conf_opt(&ptr, L2CAP_CONF_FCS, 1, pi->fcs);
+		}
+		break;
+
+	case L2CAP_MODE_STREAMING:
+		l2cap_setup_txwin(pi);
+		rfc.txwin_size      = 0;
+		rfc.max_transmit    = 0;
+		rfc.retrans_timeout = 0;
+		rfc.monitor_timeout = 0;
+		rfc.max_pdu_size    = cpu_to_le16(L2CAP_DEFAULT_MAX_PDU_SIZE);
+		if (L2CAP_DEFAULT_MAX_PDU_SIZE > pi->imtu)
+			rfc.max_pdu_size = cpu_to_le16(pi->imtu);
+
+		l2cap_add_conf_opt(&ptr, L2CAP_CONF_RFC, sizeof(rfc),
+							(unsigned long) &rfc);
+
+		if ((pi->conn->feat_mask & L2CAP_FEAT_EXT_WINDOW) &&
+			pi->extended_control) {
+			l2cap_add_conf_opt(&ptr, L2CAP_CONF_EXT_WINDOW, 2, 0);
+		}
+
+		if (!(pi->conn->feat_mask & L2CAP_FEAT_FCS))
+			break;
+
+		if (pi->fcs == L2CAP_FCS_NONE ||
+				pi->conf_state & L2CAP_CONF_NO_FCS_RECV) {
+			pi->fcs = L2CAP_FCS_NONE;
+			l2cap_add_conf_opt(&ptr, L2CAP_CONF_FCS, 1, pi->fcs);
+		}
+		break;
+	}
+
+	req->dcid  = cpu_to_le16(pi->dcid);
+	req->flags = cpu_to_le16(0);
+
+	return ptr - data;
+}
+
+
+static int l2cap_build_amp_reconf_req(struct sock *sk, void *data)
+{
+	struct l2cap_pinfo *pi = l2cap_pi(sk);
+	struct l2cap_conf_req *req = data;
+	struct l2cap_conf_rfc rfc = { .mode = pi->mode };
+	void *ptr = req->data;
+
+	BT_DBG("sk %p", sk);
+
+	switch (pi->mode) {
+	case L2CAP_MODE_ERTM:
+		rfc.mode            = L2CAP_MODE_ERTM;
+		rfc.txwin_size      = pi->tx_win;
+		rfc.max_transmit    = pi->max_tx;
+		rfc.max_pdu_size    = cpu_to_le16(L2CAP_DEFAULT_MAX_PDU_SIZE);
+		l2cap_get_ertm_timeouts(&rfc, pi);
+		if (L2CAP_DEFAULT_MAX_PDU_SIZE > pi->imtu)
+			rfc.max_pdu_size = cpu_to_le16(pi->imtu);
+
+		break;
+
+	default:
+		return -ECONNREFUSED;
+	}
+
+	l2cap_add_conf_opt(&ptr, L2CAP_CONF_RFC, sizeof(rfc),
+						(unsigned long) &rfc);
+
+	if (pi->conn->feat_mask & L2CAP_FEAT_FCS) {
+		/* TODO assign fcs for br/edr based on socket config option */
+		/* FCS is not used with AMP because it is redundant - lower
+		 * layers already include a checksum. */
+		if (pi->amp_id)
+			pi->local_conf.fcs = L2CAP_FCS_NONE;
+		else
+			pi->local_conf.fcs = L2CAP_FCS_CRC16;
+
+		l2cap_add_conf_opt(&ptr, L2CAP_CONF_FCS, 1, pi->local_conf.fcs);
+		pi->fcs = pi->local_conf.fcs | pi->remote_conf.fcs;
+	}
+
+	req->dcid  = cpu_to_le16(pi->dcid);
+	req->flags = cpu_to_le16(0);
+
+	return ptr - data;
+}
+
+static int l2cap_parse_conf_req(struct sock *sk, void *data)
+{
+	struct l2cap_pinfo *pi = l2cap_pi(sk);
+	struct l2cap_conf_rsp *rsp = data;
+	void *ptr = rsp->data;
+	void *req = pi->conf_req;
+	int len = pi->conf_len;
+	int type, hint, olen;
+	unsigned long val;
+	struct l2cap_conf_rfc rfc = { .mode = L2CAP_MODE_BASIC };
+	struct l2cap_conf_ext_fs fs;
+	u16 mtu = L2CAP_DEFAULT_MTU;
+	u16 result = L2CAP_CONF_SUCCESS;
+
+	BT_DBG("sk %p", sk);
+
+	if (pi->omtu > mtu)
+		mtu = pi->omtu;
+
+	while (len >= L2CAP_CONF_OPT_SIZE) {
+		len -= l2cap_get_conf_opt(&req, &type, &olen, &val);
+
+		hint  = type & L2CAP_CONF_HINT;
+		type &= L2CAP_CONF_MASK;
+
+		switch (type) {
+		case L2CAP_CONF_MTU:
+			mtu = val;
+			break;
+
+		case L2CAP_CONF_FLUSH_TO:
+			pi->flush_to = val;
+			if (pi->conf_state & L2CAP_CONF_LOCKSTEP)
+				result = L2CAP_CONF_UNACCEPT;
+			else
+				pi->remote_conf.flush_to = val;
+			break;
+
+		case L2CAP_CONF_QOS:
+			if (pi->conf_state & L2CAP_CONF_LOCKSTEP)
+				result = L2CAP_CONF_UNACCEPT;
+			break;
+
+		case L2CAP_CONF_RFC:
+			if (olen == sizeof(rfc))
+				memcpy(&rfc, (void *) val, olen);
+			break;
+
+		case L2CAP_CONF_FCS:
+			if (val == L2CAP_FCS_NONE)
+				pi->conf_state |= L2CAP_CONF_NO_FCS_RECV;
+			pi->remote_conf.fcs = val;
+			break;
+
+		case L2CAP_CONF_EXT_FS:
+			if (olen == sizeof(fs)) {
+				pi->conf_state |= L2CAP_CONF_EFS_RECV;
+				if (!(pi->conf_state & L2CAP_CONF_LOCKSTEP)) {
+					result = L2CAP_CONF_UNACCEPT;
+					break;
+				}
+				memcpy(&fs, (void *) val, olen);
+				if (fs.type != L2CAP_SERVICE_BEST_EFFORT) {
+					result = L2CAP_CONF_FLOW_SPEC_REJECT;
+					break;
+				}
+				pi->remote_conf.flush_to =
+						le32_to_cpu(fs.flush_to);
+				pi->remote_fs.id = fs.id;
+				pi->remote_fs.type = fs.type;
+				pi->remote_fs.max_sdu =
+						le16_to_cpu(fs.max_sdu);
+				pi->remote_fs.sdu_arr_time =
+						le32_to_cpu(fs.sdu_arr_time);
+				pi->remote_fs.acc_latency =
+						le32_to_cpu(fs.acc_latency);
+				pi->remote_fs.flush_to =
+						le32_to_cpu(fs.flush_to);
+			}
+			break;
+
+		case L2CAP_CONF_EXT_WINDOW:
+			pi->extended_control = 1;
+			pi->remote_tx_win = val;
+			pi->tx_win_max = L2CAP_TX_WIN_MAX_EXTENDED;
+			pi->conf_state |= L2CAP_CONF_EXT_WIN_RECV;
+			break;
+
+		default:
+			if (hint)
+				break;
+
+			result = L2CAP_CONF_UNKNOWN;
+			*((u8 *) ptr++) = type;
+			break;
+		}
+	}
+
+	if (pi->num_conf_rsp || pi->num_conf_req > 1)
+		goto done;
+
+	switch (pi->mode) {
+	case L2CAP_MODE_STREAMING:
+	case L2CAP_MODE_ERTM:
+		if (!(pi->conf_state & L2CAP_CONF_STATE2_DEVICE)) {
+			pi->mode = l2cap_select_mode(rfc.mode,
+					pi->conn->feat_mask);
+			break;
+		}
+
+		if (pi->mode != rfc.mode)
+			return -ECONNREFUSED;
+
+		break;
+	}
+
+done:
+	if (pi->mode != rfc.mode) {
+		result = L2CAP_CONF_UNACCEPT;
+		rfc.mode = pi->mode;
+		if (mtu > L2CAP_DEFAULT_MTU)
+			pi->omtu = mtu;
+
+		if (pi->num_conf_rsp == 1)
+			return -ECONNREFUSED;
+
+		l2cap_add_conf_opt(&ptr, L2CAP_CONF_RFC,
+					sizeof(rfc), (unsigned long) &rfc);
+	}
+
+
+	if ((pi->conf_state & L2CAP_CONF_LOCKSTEP) &&
+			!(pi->conf_state & L2CAP_CONF_EFS_RECV))
+		return -ECONNREFUSED;
+
+	if (result == L2CAP_CONF_SUCCESS) {
+		/* Configure output options and let the other side know
+		 * which ones we don't like. */
+
+		if (mtu < L2CAP_DEFAULT_MIN_MTU) {
+			result = L2CAP_CONF_UNACCEPT;
+			pi->omtu = L2CAP_DEFAULT_MIN_MTU;
+		}
+		else {
+			pi->omtu = mtu;
+			pi->conf_state |= L2CAP_CONF_MTU_DONE;
+		}
+		l2cap_add_conf_opt(&ptr, L2CAP_CONF_MTU, 2, pi->omtu);
+
+		switch (rfc.mode) {
+		case L2CAP_MODE_BASIC:
+			pi->fcs = L2CAP_FCS_NONE;
+			pi->conf_state |= L2CAP_CONF_MODE_DONE;
+			break;
+
+		case L2CAP_MODE_ERTM:
+			if (!(pi->conf_state & L2CAP_CONF_EXT_WIN_RECV))
+				pi->remote_tx_win = rfc.txwin_size;
+			pi->remote_max_tx = rfc.max_transmit;
+			pi->remote_mps = le16_to_cpu(rfc.max_pdu_size);
+			l2cap_get_ertm_timeouts(&rfc, pi);
+
+			pi->conf_state |= L2CAP_CONF_MODE_DONE;
+
+			l2cap_add_conf_opt(&ptr, L2CAP_CONF_RFC,
+					sizeof(rfc), (unsigned long) &rfc);
+
+			if (pi->conf_state & L2CAP_CONF_LOCKSTEP)
+				l2cap_add_conf_opt(&ptr, L2CAP_CONF_EXT_FS,
+					sizeof(fs), (unsigned long) &fs);
+
+			break;
+
+		case L2CAP_MODE_STREAMING:
+			pi->remote_mps = le16_to_cpu(rfc.max_pdu_size);
+
+			pi->conf_state |= L2CAP_CONF_MODE_DONE;
+
+			l2cap_add_conf_opt(&ptr, L2CAP_CONF_RFC,
+					sizeof(rfc), (unsigned long) &rfc);
+
+			break;
+
+		default:
+			result = L2CAP_CONF_UNACCEPT;
+
+			memset(&rfc, 0, sizeof(rfc));
+			rfc.mode = pi->mode;
+		}
+
+		if (pi->conf_state & L2CAP_CONF_LOCKSTEP &&
+				!(pi->conf_state & L2CAP_CONF_PEND_SENT)) {
+			pi->conf_state |= L2CAP_CONF_PEND_SENT;
+			result = L2CAP_CONF_PENDING;
+
+			if (pi->conf_state & L2CAP_CONF_LOCKSTEP_PEND &&
+					pi->amp_id) {
+				struct hci_chan *chan;
+				/* Trigger logical link creation only on AMP */
+
+				chan = l2cap_chan_admit(pi->amp_id, sk);
+				if (!chan)
+					return -ECONNREFUSED;
+
+				if (chan->state == BT_CONNECTED)
+					l2cap_create_cfm(chan, 0);
+			}
+		}
+
+		if (result == L2CAP_CONF_SUCCESS)
+			pi->conf_state |= L2CAP_CONF_OUTPUT_DONE;
+	}
+	rsp->scid   = cpu_to_le16(pi->dcid);
+	rsp->result = cpu_to_le16(result);
+	rsp->flags  = cpu_to_le16(0x0000);
+
+	return ptr - data;
+}
+
+static int l2cap_parse_amp_move_reconf_req(struct sock *sk, void *data)
+{
+	struct l2cap_pinfo *pi = l2cap_pi(sk);
+	struct l2cap_conf_rsp *rsp = data;
+	void *ptr = rsp->data;
+	void *req = pi->conf_req;
+	int len = pi->conf_len;
+	int type, hint, olen;
+	unsigned long val;
+	struct l2cap_conf_rfc rfc = { .mode = L2CAP_MODE_BASIC };
+	struct l2cap_conf_ext_fs fs;
+	u16 mtu = pi->omtu;
+	u16 tx_win = pi->remote_tx_win;
+	u16 result = L2CAP_CONF_SUCCESS;
+
+	BT_DBG("sk %p", sk);
+
+	while (len >= L2CAP_CONF_OPT_SIZE) {
+		len -= l2cap_get_conf_opt(&req, &type, &olen, &val);
+
+		hint  = type & L2CAP_CONF_HINT;
+		type &= L2CAP_CONF_MASK;
+
+		switch (type) {
+		case L2CAP_CONF_MTU:
+			mtu = val;
+			break;
+
+		case L2CAP_CONF_FLUSH_TO:
+			if (pi->amp_move_id)
+				result = L2CAP_CONF_UNACCEPT;
+			else
+				pi->remote_conf.flush_to = val;
+			break;
+
+		case L2CAP_CONF_QOS:
+			if (pi->amp_move_id)
+				result = L2CAP_CONF_UNACCEPT;
+			break;
+
+		case L2CAP_CONF_RFC:
+			if (olen == sizeof(rfc))
+				memcpy(&rfc, (void *) val, olen);
+			break;
+
+		case L2CAP_CONF_FCS:
+			pi->remote_conf.fcs = val;
+			break;
+
+		case L2CAP_CONF_EXT_FS:
+			if (olen == sizeof(fs)) {
+				memcpy(&fs, (void *) val, olen);
+				if (fs.type != L2CAP_SERVICE_BEST_EFFORT)
+					result = L2CAP_CONF_FLOW_SPEC_REJECT;
+				else {
+					pi->remote_conf.flush_to =
+						le32_to_cpu(fs.flush_to);
+				}
+			}
+			break;
+
+		case L2CAP_CONF_EXT_WINDOW:
+			tx_win = val;
+			break;
+
+		default:
+			if (hint)
+				break;
+
+			result = L2CAP_CONF_UNKNOWN;
+			*((u8 *) ptr++) = type;
+			break;
+			}
+	}
+
+	BT_DBG("result 0x%2.2x cur mode 0x%2.2x req  mode 0x%2.2x",
+		result, pi->mode, rfc.mode);
+
+	if (pi->mode != rfc.mode || rfc.mode == L2CAP_MODE_BASIC)
+		result = L2CAP_CONF_UNACCEPT;
+
+	if (result == L2CAP_CONF_SUCCESS) {
+		/* Configure output options and let the other side know
+		 * which ones we don't like. */
+
+		/* Don't allow mtu to decrease. */
+		if (mtu < pi->omtu)
+			result = L2CAP_CONF_UNACCEPT;
+
+		BT_DBG("mtu %d omtu %d", mtu, pi->omtu);
+
+		l2cap_add_conf_opt(&ptr, L2CAP_CONF_MTU, 2, pi->omtu);
+
+		/* Don't allow extended transmit window to change. */
+		if (tx_win != pi->remote_tx_win) {
+			result = L2CAP_CONF_UNACCEPT;
+			l2cap_add_conf_opt(&ptr, L2CAP_CONF_EXT_WINDOW, 2,
+					pi->remote_tx_win);
+		}
+
+		pi->remote_mps = rfc.max_pdu_size;
+
+		if (rfc.mode == L2CAP_MODE_ERTM) {
+			l2cap_get_ertm_timeouts(&rfc, pi);
+		} else {
+			rfc.retrans_timeout = 0;
+			rfc.monitor_timeout = 0;
+		}
+
+		l2cap_add_conf_opt(&ptr, L2CAP_CONF_RFC,
+					sizeof(rfc), (unsigned long) &rfc);
+	}
+
+	if (result != L2CAP_CONF_SUCCESS)
+		goto done;
+
+	pi->fcs = pi->remote_conf.fcs | pi->local_conf.fcs;
+
+	if (pi->rx_state == L2CAP_ERTM_RX_STATE_WAIT_F_FLAG)
+		pi->flush_to = pi->remote_conf.flush_to;
+
+done:
+	rsp->scid   = cpu_to_le16(pi->dcid);
+	rsp->result = cpu_to_le16(result);
+	rsp->flags  = cpu_to_le16(0x0000);
+
+	return ptr - data;
+}
+
+static int l2cap_parse_conf_rsp(struct sock *sk, void *rsp, int len, void *data, u16 *result)
+{
+	struct l2cap_pinfo *pi = l2cap_pi(sk);
+	struct l2cap_conf_req *req = data;
+	void *ptr = req->data;
+	int type, olen;
+	unsigned long val;
+	struct l2cap_conf_rfc rfc;
+
+	BT_DBG("sk %p, rsp %p, len %d, req %p", sk, rsp, len, data);
+
+	/* Initialize rfc in case no rfc option is received */
+	rfc.mode = pi->mode;
+	rfc.retrans_timeout = cpu_to_le16(L2CAP_DEFAULT_RETRANS_TO);
+	rfc.monitor_timeout = cpu_to_le16(L2CAP_DEFAULT_MONITOR_TO);
+	rfc.max_pdu_size = cpu_to_le16(L2CAP_DEFAULT_MAX_PDU_SIZE);
+
+	while (len >= L2CAP_CONF_OPT_SIZE) {
+		len -= l2cap_get_conf_opt(&rsp, &type, &olen, &val);
+
+		switch (type) {
+		case L2CAP_CONF_MTU:
+			if (val < L2CAP_DEFAULT_MIN_MTU) {
+				*result = L2CAP_CONF_UNACCEPT;
+				pi->imtu = L2CAP_DEFAULT_MIN_MTU;
+			} else
+				pi->imtu = val;
+			l2cap_add_conf_opt(&ptr, L2CAP_CONF_MTU, 2, pi->imtu);
+			break;
+
+		case L2CAP_CONF_FLUSH_TO:
+			pi->flush_to = val;
+			l2cap_add_conf_opt(&ptr, L2CAP_CONF_FLUSH_TO,
+							2, pi->flush_to);
+			break;
+
+		case L2CAP_CONF_RFC:
+			if (olen == sizeof(rfc))
+				memcpy(&rfc, (void *)val, olen);
+
+			if ((pi->conf_state & L2CAP_CONF_STATE2_DEVICE) &&
+							rfc.mode != pi->mode)
+				return -ECONNREFUSED;
+
+			pi->fcs = 0;
+
+			l2cap_add_conf_opt(&ptr, L2CAP_CONF_RFC,
+					sizeof(rfc), (unsigned long) &rfc);
+			break;
+
+		case L2CAP_CONF_EXT_WINDOW:
+			pi->tx_win = val;
+
+			if (pi->tx_win > L2CAP_TX_WIN_MAX_ENHANCED)
+				pi->tx_win = L2CAP_TX_WIN_MAX_ENHANCED;
+
+			l2cap_add_conf_opt(&ptr, L2CAP_CONF_EXT_WINDOW,
+					2, pi->tx_win);
+			break;
+
+		default:
+			break;
+		}
+	}
+
+	if (pi->mode == L2CAP_MODE_BASIC && pi->mode != rfc.mode)
+		return -ECONNREFUSED;
+
+	pi->mode = rfc.mode;
+
+	if (*result == L2CAP_CONF_SUCCESS) {
+		switch (rfc.mode) {
+		case L2CAP_MODE_ERTM:
+			pi->retrans_timeout = le16_to_cpu(rfc.retrans_timeout);
+			pi->monitor_timeout = le16_to_cpu(rfc.monitor_timeout);
+			pi->mps    = le16_to_cpu(rfc.max_pdu_size);
+			break;
+		case L2CAP_MODE_STREAMING:
+			pi->mps    = le16_to_cpu(rfc.max_pdu_size);
+		}
+	}
+
+	req->dcid   = cpu_to_le16(pi->dcid);
+	req->flags  = cpu_to_le16(0x0000);
+
+	return ptr - data;
+}
+
+static int l2cap_build_conf_rsp(struct sock *sk, void *data, u16 result, u16 flags)
+{
+	struct l2cap_conf_rsp *rsp = data;
+	void *ptr = rsp->data;
+
+	BT_DBG("sk %p", sk);
+
+	rsp->scid   = cpu_to_le16(l2cap_pi(sk)->dcid);
+	rsp->result = cpu_to_le16(result);
+	rsp->flags  = cpu_to_le16(flags);
+
+	return ptr - data;
+}
+
+static void l2cap_conf_rfc_get(struct sock *sk, void *rsp, int len)
+{
+	struct l2cap_pinfo *pi = l2cap_pi(sk);
+	int type, olen;
+	unsigned long val;
+	struct l2cap_conf_rfc rfc;
+
+	BT_DBG("sk %p, rsp %p, len %d", sk, rsp, len);
+
+	/* Initialize rfc in case no rfc option is received */
+	rfc.mode = pi->mode;
+	rfc.retrans_timeout = cpu_to_le16(L2CAP_DEFAULT_RETRANS_TO);
+	rfc.monitor_timeout = cpu_to_le16(L2CAP_DEFAULT_MONITOR_TO);
+	rfc.max_pdu_size = cpu_to_le16(L2CAP_DEFAULT_MAX_PDU_SIZE);
+
+	if ((pi->mode != L2CAP_MODE_ERTM) && (pi->mode != L2CAP_MODE_STREAMING))
+		return;
+
+	while (len >= L2CAP_CONF_OPT_SIZE) {
+		len -= l2cap_get_conf_opt(&rsp, &type, &olen, &val);
+
+		switch (type) {
+		case L2CAP_CONF_RFC:
+			if (olen == sizeof(rfc))
+				memcpy(&rfc, (void *)val, olen);
+			goto done;
+		}
+	}
+
+done:
+	switch (rfc.mode) {
+	case L2CAP_MODE_ERTM:
+		pi->retrans_timeout = le16_to_cpu(rfc.retrans_timeout);
+		pi->monitor_timeout = le16_to_cpu(rfc.monitor_timeout);
+		pi->mps    = le16_to_cpu(rfc.max_pdu_size);
+		break;
+	case L2CAP_MODE_STREAMING:
+		pi->mps    = le16_to_cpu(rfc.max_pdu_size);
+	}
+}
+
+static void l2cap_conf_ext_fs_get(struct sock *sk, void *rsp, int len)
+{
+	struct l2cap_pinfo *pi = l2cap_pi(sk);
+	int type, olen;
+	unsigned long val;
+	struct l2cap_conf_ext_fs fs;
+
+	BT_DBG("sk %p, rsp %p, len %d", sk, rsp, len);
+
+	while (len >= L2CAP_CONF_OPT_SIZE) {
+		len -= l2cap_get_conf_opt(&rsp, &type, &olen, &val);
+		if ((type == L2CAP_CONF_EXT_FS) &&
+				(olen == sizeof(struct l2cap_conf_ext_fs))) {
+			memcpy(&fs, (void *)val, olen);
+			pi->local_fs.id = fs.id;
+			pi->local_fs.type = fs.type;
+			pi->local_fs.max_sdu = le16_to_cpu(fs.max_sdu);
+			pi->local_fs.sdu_arr_time =
+						le32_to_cpu(fs.sdu_arr_time);
+			pi->local_fs.acc_latency = le32_to_cpu(fs.acc_latency);
+			pi->local_fs.flush_to = le32_to_cpu(fs.flush_to);
+			break;
+		}
+	}
+
+}
+
+static int l2cap_finish_amp_move(struct sock *sk)
+{
+	struct l2cap_pinfo *pi;
+	int err;
+
+	BT_DBG("sk %p", sk);
+
+	pi = l2cap_pi(sk);
+
+	pi->amp_move_role = L2CAP_AMP_MOVE_NONE;
+	pi->rx_state = L2CAP_ERTM_RX_STATE_RECV;
+
+	if (pi->ampcon)
+		pi->conn->mtu = pi->ampcon->hdev->acl_mtu;
+	else
+		pi->conn->mtu = pi->conn->hcon->hdev->acl_mtu;
+
+	err = l2cap_setup_resegment(sk);
+
+	return err;
+}
+
+static int l2cap_amp_move_reconf_rsp(struct sock *sk, void *rsp, int len,
+					u16 result)
+{
+	int err = 0;
+	struct l2cap_conf_rfc rfc = {.mode = L2CAP_MODE_BASIC};
+	struct l2cap_pinfo *pi = l2cap_pi(sk);
+
+	BT_DBG("sk %p, rsp %p, len %d, res 0x%2.2x", sk, rsp, len, result);
+
+	if (pi->reconf_state == L2CAP_RECONF_NONE)
+		return -ECONNREFUSED;
+
+	if (result == L2CAP_CONF_SUCCESS) {
+		while (len >= L2CAP_CONF_OPT_SIZE) {
+			int type, olen;
+			unsigned long val;
+
+			len -= l2cap_get_conf_opt(&rsp, &type, &olen, &val);
+
+			if (type == L2CAP_CONF_RFC) {
+				if (olen == sizeof(rfc))
+					memcpy(&rfc, (void *)val, olen);
+
+				if (rfc.mode != pi->mode) {
+					l2cap_send_disconn_req(pi->conn, sk,
+								ECONNRESET);
+					return -ECONNRESET;
+				}
+
+				goto done;
+			}
+		}
+	}
+
+	BT_ERR("Expected RFC option was missing, using existing values");
+
+	rfc.mode = pi->mode;
+	rfc.retrans_timeout = cpu_to_le16(pi->retrans_timeout);
+	rfc.monitor_timeout = cpu_to_le16(pi->monitor_timeout);
+
+done:
+	l2cap_ertm_stop_ack_timer(pi);
+	l2cap_ertm_stop_retrans_timer(pi);
+	l2cap_ertm_stop_monitor_timer(pi);
+
+	pi->mps = le16_to_cpu(rfc.max_pdu_size);
+	if (pi->mode == L2CAP_MODE_ERTM) {
+		pi->retrans_timeout = le16_to_cpu(rfc.retrans_timeout);
+		pi->monitor_timeout = le16_to_cpu(rfc.monitor_timeout);
+	}
+
+	if (l2cap_pi(sk)->reconf_state == L2CAP_RECONF_ACC) {
+		l2cap_pi(sk)->reconf_state = L2CAP_RECONF_NONE;
+
+		/* Respond to poll */
+		err = l2cap_answer_move_poll(sk);
+	} else if (l2cap_pi(sk)->reconf_state == L2CAP_RECONF_INT) {
+		if (pi->mode == L2CAP_MODE_ERTM) {
+			l2cap_ertm_tx(sk, NULL, NULL,
+					L2CAP_ERTM_EVENT_EXPLICIT_POLL);
+			pi->rx_state = L2CAP_ERTM_RX_STATE_WAIT_F_FLAG;
+		}
+	}
+
+	return err;
+}
+
+
+static inline int l2cap_command_rej(struct l2cap_conn *conn, struct l2cap_cmd_hdr *cmd, u8 *data)
+{
+	struct l2cap_cmd_rej *rej = (struct l2cap_cmd_rej *) data;
+
+	if (rej->reason != 0x0000)
+		return 0;
+
+	if ((conn->info_state & L2CAP_INFO_FEAT_MASK_REQ_SENT) &&
+					cmd->ident == conn->info_ident) {
+		del_timer(&conn->info_timer);
+
+		conn->info_state |= L2CAP_INFO_FEAT_MASK_REQ_DONE;
+		conn->info_ident = 0;
+
+		l2cap_conn_start(conn);
+	}
+
+	return 0;
+}
+
+static struct sock *l2cap_create_connect(struct l2cap_conn *conn,
+						struct l2cap_cmd_hdr *cmd,
+						u8 *data, u8 rsp_code,
+						u8 amp_id)
+{
+	struct l2cap_chan_list *list = &conn->chan_list;
+	struct l2cap_conn_req *req = (struct l2cap_conn_req *) data;
+	struct l2cap_conn_rsp rsp;
+	struct sock *parent, *sk = NULL;
+	int result, status = L2CAP_CS_NO_INFO;
+
+	u16 dcid = 0, scid = __le16_to_cpu(req->scid);
+	__le16 psm = req->psm;
+
+	BT_DBG("psm 0x%2.2x scid 0x%4.4x", psm, scid);
+
+	/* Check if we have socket listening on psm */
+	parent = l2cap_get_sock_by_psm(BT_LISTEN, psm, conn->src);
+	if (!parent) {
+		result = L2CAP_CR_BAD_PSM;
+		goto sendresp;
+	}
+
+	bh_lock_sock(parent);
+
+	/* Check if the ACL is secure enough (if not SDP) */
+	if (psm != cpu_to_le16(0x0001) &&
+				!hci_conn_check_link_mode(conn->hcon)) {
+		conn->disc_reason = 0x05;
+		result = L2CAP_CR_SEC_BLOCK;
+		goto response;
+	}
+
+	result = L2CAP_CR_NO_MEM;
+
+	/* Check for backlog size */
+	if (sk_acceptq_is_full(parent)) {
+		BT_DBG("backlog full %d", parent->sk_ack_backlog);
+		goto response;
+	}
+
+	sk = l2cap_sock_alloc(sock_net(parent), NULL, BTPROTO_L2CAP, GFP_ATOMIC);
+	if (!sk)
+		goto response;
+
+	write_lock_bh(&list->lock);
+
+	/* Check if we already have channel with that dcid */
+	if (__l2cap_get_chan_by_dcid(list, scid)) {
+		write_unlock_bh(&list->lock);
+		sock_set_flag(sk, SOCK_ZAPPED);
+		l2cap_sock_kill(sk);
+		sk = NULL;
+		goto response;
+	}
+
+	hci_conn_hold(conn->hcon);
+
+	l2cap_sock_init(sk, parent);
+	bacpy(&bt_sk(sk)->src, conn->src);
+	bacpy(&bt_sk(sk)->dst, conn->dst);
+	l2cap_pi(sk)->psm  = psm;
+	l2cap_pi(sk)->dcid = scid;
+
+	bt_accept_enqueue(parent, sk);
+
+	__l2cap_chan_add(conn, sk);
+	dcid = l2cap_pi(sk)->scid;
+	l2cap_pi(sk)->amp_id = amp_id;
+
+	l2cap_sock_set_timer(sk, sk->sk_sndtimeo);
+
+	l2cap_pi(sk)->ident = cmd->ident;
+
+	if (conn->info_state & L2CAP_INFO_FEAT_MASK_REQ_DONE) {
+		if (l2cap_check_security(sk)) {
+			if (bt_sk(sk)->defer_setup) {
+				sk->sk_state = BT_CONNECT2;
+				result = L2CAP_CR_PEND;
+				status = L2CAP_CS_AUTHOR_PEND;
+				parent->sk_data_ready(parent, 0);
+			} else {
+				/* Force pending result for AMP controllers.
+				 * The connection will succeed after the
+				 * physical link is up. */
+				if (amp_id) {
+					sk->sk_state = BT_CONNECT2;
+					result = L2CAP_CR_PEND;
+				} else {
+					sk->sk_state = BT_CONFIG;
+					result = L2CAP_CR_SUCCESS;
+				}
+				status = L2CAP_CS_NO_INFO;
+			}
+		} else {
+			sk->sk_state = BT_CONNECT2;
+			result = L2CAP_CR_PEND;
+			status = L2CAP_CS_AUTHEN_PEND;
+		}
+	} else {
+		sk->sk_state = BT_CONNECT2;
+		result = L2CAP_CR_PEND;
+		status = L2CAP_CS_NO_INFO;
+	}
+
+	write_unlock_bh(&list->lock);
+
+response:
+	bh_unlock_sock(parent);
+
+sendresp:
+	rsp.scid   = cpu_to_le16(scid);
+	rsp.dcid   = cpu_to_le16(dcid);
+	rsp.result = cpu_to_le16(result);
+	rsp.status = cpu_to_le16(status);
+	l2cap_send_cmd(conn, cmd->ident, rsp_code, sizeof(rsp), &rsp);
+
+	if (!(conn->info_state & L2CAP_INFO_FEAT_MASK_REQ_DONE)) {
+		struct l2cap_info_req info;
+		info.type = cpu_to_le16(L2CAP_IT_FEAT_MASK);
+
+		conn->info_state |= L2CAP_INFO_FEAT_MASK_REQ_SENT;
+		conn->info_ident = l2cap_get_ident(conn);
+
+		mod_timer(&conn->info_timer, jiffies +
+					msecs_to_jiffies(L2CAP_INFO_TIMEOUT));
+
+		l2cap_send_cmd(conn, conn->info_ident,
+					L2CAP_INFO_REQ, sizeof(info), &info);
+	}
+
+	if (sk && !(l2cap_pi(sk)->conf_state & L2CAP_CONF_REQ_SENT) &&
+				result == L2CAP_CR_SUCCESS) {
+		u8 buf[128];
+		l2cap_pi(sk)->conf_state |= L2CAP_CONF_REQ_SENT;
+		l2cap_send_cmd(conn, l2cap_get_ident(conn), L2CAP_CONF_REQ,
+					l2cap_build_conf_req(sk, buf), buf);
+		l2cap_pi(sk)->num_conf_req++;
+	}
+
+	return sk;
+}
+
+static inline int l2cap_connect_req(struct l2cap_conn *conn,
+					struct l2cap_cmd_hdr *cmd, u8 *data)
+{
+	l2cap_create_connect(conn, cmd, data, L2CAP_CONN_RSP, 0);
+	return 0;
+}
+
+static inline int l2cap_connect_rsp(struct l2cap_conn *conn, struct l2cap_cmd_hdr *cmd, u8 *data)
+{
+	struct l2cap_conn_rsp *rsp = (struct l2cap_conn_rsp *) data;
+	u16 scid, dcid, result, status;
+	struct sock *sk;
+	u8 req[128];
+
+	scid   = __le16_to_cpu(rsp->scid);
+	dcid   = __le16_to_cpu(rsp->dcid);
+	result = __le16_to_cpu(rsp->result);
+	status = __le16_to_cpu(rsp->status);
+
+	BT_DBG("dcid 0x%4.4x scid 0x%4.4x result 0x%2.2x status 0x%2.2x", dcid, scid, result, status);
+
+	if (scid) {
+		sk = l2cap_get_chan_by_scid(&conn->chan_list, scid);
+		if (!sk)
+			return -EFAULT;
+	} else {
+		sk = l2cap_get_chan_by_ident(&conn->chan_list, cmd->ident);
+		if (!sk)
+			return -EFAULT;
+	}
+
+	switch (result) {
+	case L2CAP_CR_SUCCESS:
+		sk->sk_state = BT_CONFIG;
+		l2cap_pi(sk)->ident = 0;
+		l2cap_pi(sk)->dcid = dcid;
+		l2cap_pi(sk)->conf_state &= ~L2CAP_CONF_CONNECT_PEND;
+
+		if (l2cap_pi(sk)->conf_state & L2CAP_CONF_REQ_SENT)
+			break;
+
+		l2cap_pi(sk)->conf_state |= L2CAP_CONF_REQ_SENT;
+
+		l2cap_send_cmd(conn, l2cap_get_ident(conn), L2CAP_CONF_REQ,
+					l2cap_build_conf_req(sk, req), req);
+		l2cap_pi(sk)->num_conf_req++;
+		break;
+
+	case L2CAP_CR_PEND:
+		l2cap_pi(sk)->conf_state |= L2CAP_CONF_CONNECT_PEND;
+		break;
+
+	default:
+		/* don't delete l2cap channel if sk is owned by user */
+		if (sock_owned_by_user(sk)) {
+			sk->sk_state = BT_DISCONN;
+			l2cap_sock_clear_timer(sk);
+			l2cap_sock_set_timer(sk, HZ / 5);
+			break;
+		}
+
+		l2cap_chan_del(sk, ECONNREFUSED);
+		break;
+	}
+
+	bh_unlock_sock(sk);
+	return 0;
+}
+
+static inline void set_default_fcs(struct l2cap_pinfo *pi)
+{
+	/* FCS is enabled only in ERTM or streaming mode, if one or both
+	 * sides request it.
+	 */
+	if (pi->mode != L2CAP_MODE_ERTM && pi->mode != L2CAP_MODE_STREAMING)
+		pi->fcs = L2CAP_FCS_NONE;
+	else if (!(pi->conf_state & L2CAP_CONF_NO_FCS_RECV))
+		pi->fcs = L2CAP_FCS_CRC16;
+}
+
+static inline int l2cap_config_req(struct l2cap_conn *conn, struct l2cap_cmd_hdr *cmd, u16 cmd_len, u8 *data)
+{
+	struct l2cap_conf_req *req = (struct l2cap_conf_req *) data;
+	u16 dcid, flags;
+	u8 rspbuf[64];
+	struct l2cap_conf_rsp *rsp = (struct l2cap_conf_rsp *) rspbuf;
+	struct sock *sk;
+	int len;
+	u8 amp_move_reconf = 0;
+
+	dcid  = __le16_to_cpu(req->dcid);
+	flags = __le16_to_cpu(req->flags);
+
+	BT_DBG("dcid 0x%4.4x flags 0x%2.2x", dcid, flags);
+
+	sk = l2cap_get_chan_by_scid(&conn->chan_list, dcid);
+	if (!sk)
+		return -ENOENT;
+
+	BT_DBG("sk_state 0x%2.2x rx_state 0x%2.2x "
+		"reconf_state 0x%2.2x amp_id 0x%2.2x amp_move_id 0x%2.2x",
+		sk->sk_state, l2cap_pi(sk)->rx_state,
+		l2cap_pi(sk)->reconf_state, l2cap_pi(sk)->amp_id,
+		l2cap_pi(sk)->amp_move_id);
+
+	/* Detect a reconfig request due to channel move between
+	 * BR/EDR and AMP
+	 */
+	if (sk->sk_state == BT_CONNECTED &&
+		l2cap_pi(sk)->rx_state ==
+			L2CAP_ERTM_RX_STATE_WAIT_P_FLAG_RECONFIGURE)
+		l2cap_pi(sk)->reconf_state = L2CAP_RECONF_ACC;
+
+	if (l2cap_pi(sk)->reconf_state != L2CAP_RECONF_NONE)
+		amp_move_reconf = 1;
+
+	if (sk->sk_state != BT_CONFIG && !amp_move_reconf) {
+		struct l2cap_cmd_rej rej;
+
+		rej.reason = cpu_to_le16(0x0002);
+		l2cap_send_cmd(conn, cmd->ident, L2CAP_COMMAND_REJ,
+				sizeof(rej), &rej);
+		goto unlock;
+	}
+
+	/* Reject if config buffer is too small. */
+	len = cmd_len - sizeof(*req);
+	if (l2cap_pi(sk)->conf_len + len > sizeof(l2cap_pi(sk)->conf_req)) {
+		l2cap_send_cmd(conn, cmd->ident, L2CAP_CONF_RSP,
+				l2cap_build_conf_rsp(sk, rspbuf,
+					L2CAP_CONF_REJECT, flags), rspbuf);
+		goto unlock;
+	}
+
+	/* Store config. */
+	memcpy(l2cap_pi(sk)->conf_req + l2cap_pi(sk)->conf_len, req->data, len);
+	l2cap_pi(sk)->conf_len += len;
+
+	if (flags & 0x0001) {
+		/* Incomplete config. Send empty response. */
+		l2cap_send_cmd(conn, cmd->ident, L2CAP_CONF_RSP,
+				l2cap_build_conf_rsp(sk, rspbuf,
+					L2CAP_CONF_SUCCESS, 0x0001), rspbuf);
+		goto unlock;
+	}
+
+	/* Complete config. */
+	if (!amp_move_reconf)
+		len = l2cap_parse_conf_req(sk, rspbuf);
+	else
+		len = l2cap_parse_amp_move_reconf_req(sk, rspbuf);
+
+	if (len < 0) {
+		l2cap_send_disconn_req(conn, sk, ECONNRESET);
+		goto unlock;
+	}
+
+	l2cap_pi(sk)->conf_ident = cmd->ident;
+	l2cap_send_cmd(conn, cmd->ident, L2CAP_CONF_RSP, len, rspbuf);
+
+	if (l2cap_pi(sk)->conf_state & L2CAP_CONF_LOCKSTEP &&
+			rsp->result == cpu_to_le16(L2CAP_CONF_PENDING) &&
+			!l2cap_pi(sk)->amp_id) {
+		/* Send success response right after pending if using
+		 * lockstep config on BR/EDR
+		 */
+		rsp->result = cpu_to_le16(L2CAP_CONF_SUCCESS);
+		l2cap_pi(sk)->conf_state |= L2CAP_CONF_OUTPUT_DONE;
+		l2cap_send_cmd(conn, cmd->ident, L2CAP_CONF_RSP, len, rspbuf);
+	}
 
 	case L2CAP_MODE_ERTM:
 		rfc.mode            = L2CAP_MODE_ERTM;
@@ -2819,11 +4718,7 @@ static inline int l2cap_disconnect_req(struct l2cap_conn *conn,
 
 	BT_DBG("scid 0x%4.4x dcid 0x%4.4x", scid, dcid);
 
-	chan = l2cap_get_chan_by_scid(conn, dcid);
-	if (!chan)
-		return 0;
-
-	sk = chan->sk;
+	lock_sock(sk);
 
 	rsp.dcid = cpu_to_le16(chan->scid);
 	rsp.scid = cpu_to_le16(chan->dcid);
@@ -2878,8 +4773,19 @@ static inline int l2cap_disconnect_rsp(struct l2cap_conn *conn,
 	l2cap_chan_del(chan, 0);
 	bh_unlock_sock(sk);
 
-	chan->ops->close(chan->data);
-	return 0;
+static void l2cap_logical_link_worker(struct work_struct *work)
+{
+	struct l2cap_logical_link_work *log_link_work =
+		container_of(work, struct l2cap_logical_link_work, work);
+	struct sock *sk = log_link_work->chan->l2cap_sk;
+
+	if (sk) {
+		l2cap_logical_link_complete(log_link_work->chan,
+							log_link_work->status);
+		sock_put(sk);
+	}
+	hci_chan_put(log_link_work->chan);
+	kfree(log_link_work);
 }
 
 static inline int l2cap_information_req(struct l2cap_conn *conn,
@@ -4053,7 +5959,34 @@ static inline int l2cap_att_channel(struct l2cap_conn *conn,
 					__le16 cid, struct sk_buff *skb)
 {
 	struct sock *sk = NULL;
-	struct l2cap_chan *chan;
+	struct sk_buff *skb_rsp;
+	struct l2cap_hdr *lh;
+	int dir;
+	u8 err_rsp[] = {L2CAP_ATT_ERROR, 0x00, 0x00, 0x00,
+						L2CAP_ATT_NOT_SUPPORTED};
+
+	if (skb->data[0] == L2CAP_ATT_MTU_REQ) {
+		u8 mtu_rsp[] = {L2CAP_ATT_MTU_RSP, 23, 0};
+
+		skb_rsp = bt_skb_alloc(sizeof(mtu_rsp) + L2CAP_HDR_SIZE,
+								GFP_ATOMIC);
+		if (!skb_rsp)
+			goto drop;
+
+		lh = (struct l2cap_hdr *) skb_put(skb_rsp, L2CAP_HDR_SIZE);
+		lh->len = cpu_to_le16(sizeof(mtu_rsp));
+		lh->cid = cpu_to_le16(L2CAP_CID_LE_DATA);
+		memcpy(skb_put(skb_rsp, sizeof(mtu_rsp)), mtu_rsp,
+							sizeof(mtu_rsp));
+		hci_send_acl(conn->hcon, NULL, skb_rsp, 0);
+
+		goto free_skb;
+	}
+
+	dir = (skb->data[0] & L2CAP_ATT_RESPONSE_BIT) ? 0 : 1;
+
+	sk = l2cap_find_sock_by_fixed_cid_and_dir(cid, conn->src,
+							conn->dst, dir);
 
 	chan = l2cap_global_chan_by_scid(0, cid, conn->src);
 	if (!chan)
@@ -4071,10 +6004,47 @@ static inline int l2cap_att_channel(struct l2cap_conn *conn,
 	if (chan->imtu < skb->len)
 		goto drop;
 
-	if (!chan->ops->recv(chan->data, skb))
+	if (!sock_queue_rcv_skb(sk, skb))
 		goto done;
 
 drop:
+	if (skb->data[0] != L2CAP_ATT_INDICATE)
+		goto not_indicate;
+
+	/* If this is an incoming Indication, we are required to confirm */
+
+	skb_rsp = bt_skb_alloc(sizeof(u8) + L2CAP_HDR_SIZE, GFP_ATOMIC);
+	if (!skb_rsp)
+		goto free_skb;
+
+	lh = (struct l2cap_hdr *) skb_put(skb_rsp, L2CAP_HDR_SIZE);
+	lh->len = cpu_to_le16(sizeof(u8));
+	lh->cid = cpu_to_le16(L2CAP_CID_LE_DATA);
+	err_rsp[0] = L2CAP_ATT_CONFIRM;
+	memcpy(skb_put(skb_rsp, sizeof(u8)), err_rsp, sizeof(u8));
+	hci_send_acl(conn->hcon, NULL, skb_rsp, 0);
+	goto free_skb;
+
+not_indicate:
+	if (skb->data[0] & L2CAP_ATT_RESPONSE_BIT ||
+			skb->data[0] == L2CAP_ATT_CONFIRM)
+		goto free_skb;
+
+	/* If this is an incoming PDU that requires a response, respond with
+	 * a generic error so remote device doesn't hang */
+
+	skb_rsp = bt_skb_alloc(sizeof(err_rsp) + L2CAP_HDR_SIZE, GFP_ATOMIC);
+	if (!skb_rsp)
+		goto free_skb;
+
+	lh = (struct l2cap_hdr *) skb_put(skb_rsp, L2CAP_HDR_SIZE);
+	lh->len = cpu_to_le16(sizeof(err_rsp));
+	lh->cid = cpu_to_le16(L2CAP_CID_LE_DATA);
+	err_rsp[1] = skb->data[0];
+	memcpy(skb_put(skb_rsp, sizeof(err_rsp)), err_rsp, sizeof(err_rsp));
+	hci_send_acl(conn->hcon, NULL, skb_rsp, 0);
+
+free_skb:
 	kfree_skb(skb);
 
 done:

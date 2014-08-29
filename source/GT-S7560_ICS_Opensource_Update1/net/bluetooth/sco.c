@@ -1,6 +1,7 @@
 /*
    BlueZ - Bluetooth protocol stack for Linux
    Copyright (C) 2000-2001 Qualcomm Incorporated
+   Copyright (c) 2011, The Linux Foundation. All rights reserved.
 
    Written 2000,2001 by Maxim Krasnyansky <maxk@qualcomm.com>
 
@@ -791,6 +792,9 @@ static int sco_sock_shutdown(struct socket *sock, int how)
 		if (sock_flag(sk, SOCK_LINGER) && sk->sk_lingertime)
 			err = bt_sock_wait_state(sk, BT_CLOSED,
 							sk->sk_lingertime);
+		else
+			err = bt_sock_wait_state(sk, BT_CLOSED,
+							SCO_DISCONN_TIMEOUT);
 	}
 	release_sock(sk);
 	return err;
@@ -811,6 +815,11 @@ static int sco_sock_release(struct socket *sock)
 	if (sock_flag(sk, SOCK_LINGER) && sk->sk_lingertime) {
 		lock_sock(sk);
 		err = bt_sock_wait_state(sk, BT_CLOSED, sk->sk_lingertime);
+		release_sock(sk);
+	} else {
+		lock_sock(sk);
+		err = bt_sock_wait_state(sk, BT_CLOSED,
+							SCO_DISCONN_TIMEOUT);
 		release_sock(sk);
 	}
 

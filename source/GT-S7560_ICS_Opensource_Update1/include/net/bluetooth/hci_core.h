@@ -1,6 +1,6 @@
 /*
    BlueZ - Bluetooth protocol stack for Linux
-   Copyright (c) 2000-2001, 2010, Code Aurora Forum. All rights reserved.
+   Copyright (c) 2000-2001, 2010-2012, The Linux Foundation. All rights reserved.
 
    Written 2000,2001 by Maxim Krasnyansky <maxk@qualcomm.com>
 
@@ -166,6 +166,7 @@ struct hci_dev {
 	unsigned int	acl_pkts;
 	unsigned int	sco_pkts;
 	unsigned int	le_pkts;
+	unsigned int	le_white_list_size;
 
 	unsigned long	acl_last_tx;
 	unsigned long	sco_last_tx;
@@ -458,8 +459,15 @@ void hci_conn_hash_flush(struct hci_dev *hdev);
 void hci_conn_check_pending(struct hci_dev *hdev);
 
 struct hci_conn *hci_connect(struct hci_dev *hdev, int type,
-						__u16 pkt_type, bdaddr_t *dst,
-						__u8 sec_level, __u8 auth_type);
+					__u16 pkt_type, bdaddr_t *dst,
+					__u8 sec_level, __u8 auth_type);
+struct hci_conn *hci_le_connect(struct hci_dev *hdev, __u16 pkt_type,
+					bdaddr_t *dst, __u8 sec_level,
+					__u8 auth_type,
+					struct bt_le_params *le_params);
+void hci_le_add_dev_white_list(struct hci_dev *hdev, bdaddr_t *dst);
+void hci_le_remove_dev_white_list(struct hci_dev *hdev, bdaddr_t *dst);
+void hci_le_cancel_create_connect(struct hci_dev *hdev, bdaddr_t *dst);
 int hci_conn_check_link_mode(struct hci_conn *conn);
 int hci_conn_check_secure(struct hci_conn *conn, __u8 sec_level);
 int hci_conn_security(struct hci_conn *conn, __u8 sec_level, __u8 auth_type);
@@ -850,9 +858,11 @@ int mgmt_index_removed(u16 index);
 int mgmt_powered(u16 index, u8 powered);
 int mgmt_discoverable(u16 index, u8 discoverable);
 int mgmt_connectable(u16 index, u8 connectable);
-int mgmt_new_key(u16 index, struct link_key *key, u8 persistent);
-int mgmt_connected(u16 index, bdaddr_t *bdaddr);
-int mgmt_disconnected(u16 index, bdaddr_t *bdaddr);
+int mgmt_new_key(u16 index, struct link_key *key, u8 bonded);
+int mgmt_connected(u16 index, bdaddr_t *bdaddr, u8 le);
+int mgmt_le_conn_params(u16 index, bdaddr_t *bdaddr, u16 interval,
+						u16 latency, u16 timeout);
+int mgmt_disconnected(u16 index, bdaddr_t *bdaddr, u8 reason);
 int mgmt_disconnect_failed(u16 index);
 int mgmt_connect_failed(u16 index, bdaddr_t *bdaddr, u8 status);
 int mgmt_pin_code_request(u16 index, bdaddr_t *bdaddr, u8 secure);

@@ -64,6 +64,7 @@ struct mgmt_rp_read_info {
 	__u8 hci_ver;
 	__u16 hci_rev;
 	__u8 name[MGMT_MAX_NAME_LENGTH];
+	__u8 le_white_list_size;
 } __packed;
 
 struct mgmt_mode {
@@ -221,6 +222,31 @@ struct mgmt_rp_le_test_end {
 	__u16 num_pkts;
 } __packed;
 
+#define MGMT_OP_LE_READ_WHITE_LIST_SIZE	0xE000
+
+#define MGMT_OP_LE_CLEAR_WHITE_LIST	0xE001
+
+#define MGMT_OP_LE_ADD_DEV_WHITE_LIST	0xE002
+struct mgmt_cp_le_add_dev_white_list {
+	__u8 addr_type;
+	bdaddr_t bdaddr;
+} __packed;
+
+#define MGMT_OP_LE_REMOVE_DEV_WHITE_LIST	0xE003
+struct mgmt_cp_le_remove_dev_white_list {
+	__u8 addr_type;
+	bdaddr_t bdaddr;
+} __packed;
+
+#define MGMT_OP_LE_CREATE_CONN_WHITE_LIST	0xE004
+
+#define MGMT_OP_LE_CANCEL_CREATE_CONN_WHITE_LIST	0xE005
+
+#define MGMT_OP_LE_CANCEL_CREATE_CONN	0xE006
+struct mgmt_cp_le_cancel_create_conn {
+	bdaddr_t	bdaddr;
+} __packed;
+
 #define MGMT_EV_CMD_COMPLETE		0x0001
 struct mgmt_ev_cmd_complete {
 	__le16 opcode;
@@ -264,6 +290,7 @@ struct mgmt_ev_connected {
 #define MGMT_EV_DISCONNECTED		0x000C
 struct mgmt_ev_disconnected {
 	bdaddr_t bdaddr;
+	__u8     reason;
 } __packed;
 
 #define MGMT_EV_CONNECT_FAILED		0x000D
@@ -311,5 +338,51 @@ struct mgmt_ev_remote_name {
 } __packed;
 
 #define MGMT_EV_DISCOVERING		0x0014
+
+#define MGMT_EV_USER_PASSKEY_REQUEST	0x0015
+struct mgmt_ev_user_passkey_request {
+	bdaddr_t bdaddr;
+} __packed;
+
+#define MGMT_EV_ENCRYPT_CHANGE		0x0016
+struct mgmt_ev_encrypt_change {
+	bdaddr_t bdaddr;
+	__u8 status;
+} __packed;
+
+
+#define MGMT_EV_REMOTE_CLASS		0x0017
+struct mgmt_ev_remote_class {
+	bdaddr_t bdaddr;
+	__u8 dev_class[3];
+} __packed;
+
+#define MGMT_EV_REMOTE_VERSION		0x0018
+struct mgmt_ev_remote_version {
+	bdaddr_t bdaddr;
+	__u8	lmp_ver;
+	__u16	manufacturer;
+	__u16	lmp_subver;
+} __packed;
+
+#define MGMT_EV_REMOTE_FEATURES		0x0019
+struct mgmt_ev_remote_features {
+	bdaddr_t bdaddr;
+	uint8_t features[8];
+} __packed;
+
+#define MGMT_EV_RSSI_UPDATE		0x0020
+struct mgmt_ev_rssi_update {
+	bdaddr_t	bdaddr;
+	__s8			rssi;
+} __packed;
+
+#define MGMT_EV_LE_CONN_PARAMS		0xF000
+struct mgmt_ev_le_conn_params {
+	bdaddr_t bdaddr;
+	__u16 interval;
+	__u16 latency;
+	__u16 timeout;
+} __packed;
 
 #endif /*BT_MGMT*/

@@ -1,6 +1,6 @@
 /*
    BlueZ - Bluetooth protocol stack for Linux
-   Copyright (C) 2000-2001 Qualcomm Incorporated
+   Copyright (c) 2000-2001, 2011-2012 The Linux Foundation.  All rights reserved.
    Copyright (C) 2009-2010 Gustavo F. Padovan <gustavo@padovan.org>
    Copyright (C) 2010 Google Inc.
 
@@ -31,10 +31,94 @@
 #include <net/bluetooth/l2cap.h>
 #include <net/bluetooth/smp.h>
 
-static const struct proto_ops l2cap_sock_ops;
-static void l2cap_sock_init(struct sock *sk, struct sock *parent);
-static struct sock *l2cap_sock_alloc(struct net *net, struct socket *sock,
-							int proto, gfp_t prio);
+/* ---- L2CAP timers ---- */
+static void l2cap_sock_timeout(unsigned long arg)
+{
+	struct sock *sk = (struct sock *) arg;
+	int reason;
+
+	BT_DBG("sock %p state %d", sk, sk->sk_state);
+
+	bh_lock_sock(sk);
+
+	if (sock_owned_by_user(sk)) {
+		/* sk is owned by user. Try again later */
+		l2cap_sock_set_timer(sk, HZ / 5);
+		bh_unlock_sock(sk);
+		sock_put(sk);
+		return;
+	}
+
+	if (sk->sk_state == BT_CONNECTED || sk->sk_state == BT_CONFIG)
+		reason = ECONNREFUSED;
+	else if (sk->sk_state == BT_CONNECT &&
+				l2cap_pi(sk)->sec_level != BT_SECURITY_SDP)
+		reason = ECONNREFUSED;
+	else
+		reason = ETIMEDOUT;
+
+	__l2cap_sock_close(sk, reason);
+
+	bh_unlock_sock(sk);
+
+	l2cap_sock_kill(sk);
+	sock_put(sk);
+}
+
+void l2cap_sock_set_timer(struct sock *sk, long timeout)
+{
+	BT_DBG("sk %p state %d timeout %ld", sk, sk->sk_state, timeout);
+	sk_reset_timer(sk, &sk->sk_timer, jiffies + timeout);
+}
+
+void l2cap_sock_clear_timer(struct sock *sk)
+{
+	BT_DBG("sock %p state %d", sk, sk->sk_state);
+	sk_stop_timer(sk, &sk->sk_timer);
+}
+
+int l2cap_sock_le_params_valid(struct bt_le_params *le_params)
+{
+	if (!le_params || le_params->latency > BT_LE_LATENCY_MAX ||
+			le_params->scan_window > BT_LE_SCAN_WINDOW_MAX ||
+			le_params->scan_interval < BT_LE_SCAN_INTERVAL_MIN ||
+			le_params->scan_window > le_params->scan_interval ||
+			le_params->interval_min < BT_LE_CONN_INTERVAL_MIN ||
+			le_params->interval_max > BT_LE_CONN_INTERVAL_MAX ||
+			le_params->interval_min > le_params->interval_max ||
+			le_params->supervision_timeout < BT_LE_SUP_TO_MIN ||
+			le_params->supervision_timeout > BT_LE_SUP_TO_MAX) {
+		return 0;
+	}
+
+	return 1;
+}
+
+int l2cap_sock_le_conn_update_params_valid(struct bt_le_params *le_params)
+{
+	if (!le_params || le_params->latency > BT_LE_LATENCY_MAX ||
+			le_params->interval_min < BT_LE_CONN_INTERVAL_MIN ||
+			le_params->interval_max > BT_LE_CONN_INTERVAL_MAX ||
+			le_params->interval_min > le_params->interval_max ||
+			le_params->supervision_timeout < BT_LE_SUP_TO_MIN ||
+			le_params->supervision_timeout > BT_LE_SUP_TO_MAX) {
+		return 0;
+	}
+
+	return 1;
+}
+
+static struct sock *__l2cap_get_sock_by_addr(__le16 psm, bdaddr_t *src)
+{
+	struct sock *sk;
+	struct hlist_node *node;
+	sk_for_each(sk, node, &l2cap_sk_list.head)
+		if (l2cap_pi(sk)->sport == psm && !bacmp(&bt_sk(sk)->src, src))
+			goto found;
+	sk = NULL;
+found:
+	return sk;
+}
 
 static int l2cap_sock_bind(struct socket *sock, struct sockaddr *addr, int alen)
 {
@@ -668,9 +752,10 @@ static int l2cap_sock_setsockopt(struct socket *sock, int level, int optname, ch
 
 		pwr.force_active = BT_POWER_FORCE_ACTIVE_ON;
 
-		len = min_t(unsigned int, sizeof(pwr), optlen);
-		if (copy_from_user((char *) &pwr, optval, len)) {
-			err = -EFAULT;
+		if (!conn->hcon->out ||
+				!l2cap_sock_le_conn_update_params_valid(
+					&le_params)) {
+			err = -EINVAL;
 			break;
 		}
 		chan->force_active = pwr.force_active;
@@ -818,12 +903,24 @@ static int l2cap_sock_shutdown(struct socket *sock, int how)
 static int l2cap_sock_release(struct socket *sock)
 {
 	struct sock *sk = sock->sk;
+	struct sock *sk2 = NULL;
 	int err;
 
 	BT_DBG("sock %p, sk %p", sock, sk);
 
 	if (!sk)
 		return 0;
+
+	/* If this is an ATT socket, find it's matching server/client */
+	if (l2cap_pi(sk)->scid == L2CAP_CID_LE_DATA)
+		sk2 = l2cap_find_sock_by_fixed_cid_and_dir(L2CAP_CID_LE_DATA,
+					&bt_sk(sk)->src, &bt_sk(sk)->dst,
+					l2cap_pi(sk)->incoming ? 0 : 1);
+
+	/* If matching socket found, request tear down */
+	BT_DBG("sock:%p companion:%p", sk, sk2);
+	if (sk2)
+		l2cap_sock_set_timer(sk2, 1);
 
 	err = l2cap_sock_shutdown(sock, 2);
 

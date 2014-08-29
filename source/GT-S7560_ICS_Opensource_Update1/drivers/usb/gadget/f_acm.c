@@ -5,7 +5,7 @@
  * Copyright (C) 2008 by David Brownell
  * Copyright (C) 2008 by Nokia Corporation
  * Copyright (C) 2009 by Samsung Electronics
- * Copyright (c) 2011 Code Aurora Forum. All rights reserved.
+ * Copyright (c) 2011 The Linux Foundation. All rights reserved.
  * Author: Michal Nazarewicz (m.nazarewicz@samsung.com)
  *
  * This file from the Code Aurora Forum is free software; you can
