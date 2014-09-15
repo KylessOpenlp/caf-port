@@ -1210,11 +1210,9 @@ msmsdcc_data_err(struct msmsdcc_host *host, struct mmc_data *data,
 		 */
 		if (!(data->mrq->cmd->opcode == MMC_BUS_TEST_W
 			|| data->mrq->cmd->opcode == MMC_BUS_TEST_R)) {
-			pr_err("%s: CMD%d: Data timeout. DAT0 => %d\n",
+			pr_err("%s: CMD%d: Data timeout\n",
 				 mmc_hostname(host->mmc),
-				 data->mrq->cmd->opcode,
-				 (readl_relaxed(host->base
-				 + MCI_TEST_INPUT) & 0x2) ? 1 : 0);
+				 data->mrq->cmd->opcode);
 			data->error = -ETIMEDOUT;
 			msmsdcc_dump_sdcc_state(host);
 		}
@@ -1640,7 +1638,7 @@ msmsdcc_irq(int irq, void *dev_id)
 			msmsdcc_delay(host);
 		}
 
-		if (!atomic_read(&host->clks_on)) {
+		if (!host->clks_on) {
 			pr_debug("%s: %s: SDIO async irq received\n",
 					mmc_hostname(host->mmc), __func__);
 
@@ -1889,8 +1887,7 @@ msmsdcc_request(struct mmc_host *mmc, struct mmc_request *mrq)
 	/*
 	 * Don't start the request if SDCC is not in proper state to handle it
 	 */
-	if (!host->pwr || !atomic_read(&host->clks_on)
-			|| host->sdcc_irq_disabled) {
+	if (!host->pwr || !host->clks_on || host->sdcc_irq_disabled) {
 		WARN(1, "%s: %s: SDCC is in bad state. don't process"
 		     " new request (CMD%d)\n", mmc_hostname(host->mmc),
 		     __func__, mrq->cmd->opcode);
@@ -1968,18 +1965,6 @@ static inline int msmsdcc_vreg_set_voltage(struct msm_mmc_reg_data *vreg,
 				__func__, vreg->name, min_uV, max_uV, rc);
 		}
 	}
-
-	return rc;
-}
-
-static inline int msmsdcc_vreg_get_voltage(struct msm_mmc_reg_data *vreg)
-{
-	int rc = 0;
-
-	rc = regulator_get_voltage(vreg->reg);
-	if (rc < 0)
-		pr_err("%s: regulator_get_voltage(%s) failed. rc=%d\n",
-			__func__, vreg->name, rc);
 
 	return rc;
 }
@@ -2204,79 +2189,6 @@ enum vdd_io_level {
 	VDD_IO_SET_LEVEL,
 };
 
-/*
- * This function returns the current VDD IO voltage level.
- * Returns negative value if it fails to read the voltage level
- * Returns 0 if regulator was disabled or if VDD_IO (and VDD)
- * regulator were not defined for host.
- */
-static int msmsdcc_get_vdd_io_vol(struct msmsdcc_host *host)
-{
-	int rc = 0;
-
-	if (host->plat->vreg_data) {
-		struct msm_mmc_reg_data *io_reg =
-			host->plat->vreg_data->vdd_io_data;
-
-		/*
-		 * If vdd_io is not defined, then we can consider that
-		 * IO voltage is same as VDD.
-		 */
-		if (!io_reg)
-			io_reg = host->plat->vreg_data->vdd_data;
-
-		if (io_reg && io_reg->is_enabled)
-			rc = msmsdcc_vreg_get_voltage(io_reg);
-	}
-
-	return rc;
-}
-
-/*
- * This function updates the IO pad power switch bit in MCI_CLK register
- * based on currrent IO pad voltage level.
- * NOTE: This function assumes that host lock was not taken by caller.
- */
-static void msmsdcc_update_io_pad_pwr_switch(struct msmsdcc_host *host)
-{
-	int rc = 0;
-	unsigned long flags;
-
-	rc = msmsdcc_get_vdd_io_vol(host);
-
-	spin_lock_irqsave(&host->lock, flags);
-	/*
-	 * Dual voltage pad is the SDCC's (chipset) functionality and not all
-	 * the SDCC instances support the dual voltage pads.
-	 * For dual-voltage pad (1.8v/3.3v), SW should set IO_PAD_PWR_SWITCH
-	 * bit before using the pads in 1.8V mode.
-	 * For regular, not dual-voltage pads (including eMMC 1.2v/1.8v pads),
-	 * IO_PAD_PWR_SWITCH bit is a don't care.
-	 * But we don't have an option to know (by reading some SDCC register)
-	 * that a particular SDCC instance supports dual voltage pads or not,
-	 * so we simply set the IO_PAD_PWR_SWITCH bit for low voltage IO
-	 * (1.8v/1.2v). For regular (not dual-voltage pads), this bit value
-	 * is anyway ignored.
-	 */
-	if (rc > 0 && rc < 2700000)
-		host->io_pad_pwr_switch = 1;
-	else
-		host->io_pad_pwr_switch = 0;
-
-	if (atomic_read(&host->clks_on)) {
-		if (host->io_pad_pwr_switch)
-			writel_relaxed((readl_relaxed(host->base + MMCICLOCK) |
-					IO_PAD_PWR_SWITCH),
-					host->base + MMCICLOCK);
-		else
-			writel_relaxed((readl_relaxed(host->base + MMCICLOCK) &
-					~IO_PAD_PWR_SWITCH),
-					host->base + MMCICLOCK);
-		msmsdcc_sync_reg_wr(host);
-	}
-	spin_unlock_irqrestore(&host->lock, flags);
-}
-
 static int msmsdcc_set_vdd_io_vol(struct msmsdcc_host *host,
 				  enum vdd_io_level level,
 				  unsigned int voltage_level)
@@ -2322,37 +2234,17 @@ static inline int msmsdcc_is_pwrsave(struct msmsdcc_host *host)
 	return 0;
 }
 
-static inline int msmsdcc_setup_clocks(struct msmsdcc_host *host, bool enable)
+static inline void msmsdcc_setup_clocks(struct msmsdcc_host *host, bool enable)
 {
-	int rc = 0;
-
-	if (enable && !atomic_read(&host->clks_on)) {
-		if (!IS_ERR_OR_NULL(host->dfab_pclk)) {
-			rc = clk_enable(host->dfab_pclk);
-			if (rc) {
-				pr_err("%s: %s: failed to enable the bus-clock with error %d\n",
-					mmc_hostname(host->mmc), __func__, rc);
-				goto out;
-			}
-		}
-		if (!IS_ERR(host->pclk)) {
-			rc = clk_enable(host->pclk);
-			if (rc) {
-				pr_err("%s: %s: failed to enable the pclk with error %d\n",
-					mmc_hostname(host->mmc), __func__, rc);
-				goto disable_bus;
-			}
-		}
-		rc = clk_enable(host->clk);
-		if (rc) {
-			pr_err("%s: %s: failed to enable the host-clk with error %d\n",
-				mmc_hostname(host->mmc), __func__, rc);
-			goto disable_pclk;
-		}
+	if (enable) {
+		if (!IS_ERR_OR_NULL(host->dfab_pclk))
+			clk_enable(host->dfab_pclk);
+		if (!IS_ERR(host->pclk))
+			clk_enable(host->pclk);
+		clk_enable(host->clk);
 		mb();
 		msmsdcc_delay(host);
-		atomic_set(&host->clks_on, 1);
-	} else if (!enable && atomic_read(&host->clks_on)) {
+	} else {
 		mb();
 		msmsdcc_delay(host);
 		clk_disable(host->clk);
@@ -2360,18 +2252,7 @@ static inline int msmsdcc_setup_clocks(struct msmsdcc_host *host, bool enable)
 			clk_disable(host->pclk);
 		if (!IS_ERR_OR_NULL(host->dfab_pclk))
 			clk_disable(host->dfab_pclk);
-		atomic_set(&host->clks_on, 0);
 	}
-	goto out;
-
-disable_pclk:
-	if (!IS_ERR_OR_NULL(host->pclk))
-		clk_disable(host->pclk);
-disable_bus:
-	if (!IS_ERR_OR_NULL(host->dfab_pclk))
-		clk_disable(host->dfab_pclk);
-out:
-	return rc;
 }
 
 static inline unsigned int msmsdcc_get_sup_clk_rate(struct msmsdcc_host *host,
@@ -2562,7 +2443,6 @@ static u32 msmsdcc_setup_pwr(struct msmsdcc_host *host, struct mmc_ios *ios)
 		 * present or during system suspend).
 		 */
 		msmsdcc_set_vdd_io_vol(host, VDD_IO_LOW, 0);
-		msmsdcc_update_io_pad_pwr_switch(host);
 		msmsdcc_setup_pins(host, false);
 		break;
 	case MMC_POWER_UP:
@@ -2571,7 +2451,6 @@ static u32 msmsdcc_setup_pwr(struct msmsdcc_host *host, struct mmc_ios *ios)
 		msmsdcc_cfg_mpm_sdiowakeup(host, SDC_DAT1_ENABLE);
 
 		msmsdcc_set_vdd_io_vol(host, VDD_IO_HIGH, 0);
-		msmsdcc_update_io_pad_pwr_switch(host);
 		msmsdcc_setup_pins(host, true);
 		break;
 	case MMC_POWER_ON:
@@ -2897,14 +2776,15 @@ msmsdcc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 
 	spin_lock_irqsave(&host->lock, flags);
 	if (ios->clock) {
-		spin_unlock_irqrestore(&host->lock, flags);
-		rc = msmsdcc_setup_clocks(host, true);
-		if (rc)
-			goto out;
-		spin_lock_irqsave(&host->lock, flags);
-		writel_relaxed(host->mci_irqenable, host->base + MMCIMASK0);
-		mb();
-		msmsdcc_cfg_sdio_wakeup(host, false);
+		if (!host->clks_on) {
+			msmsdcc_setup_clocks(host, true);
+			host->clks_on = 1;
+			writel_relaxed(host->mci_irqenable,
+					host->base + MMCIMASK0);
+			mb();
+			msmsdcc_cfg_sdio_wakeup(host, false);
+		}
+
 		clock = msmsdcc_get_sup_clk_rate(host, ios->clock);
 		/*
 		 * For DDR50 mode, controller needs clock rate to be
@@ -2946,6 +2826,7 @@ msmsdcc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		msmsdcc_delay(host);
 		clk |= MCI_CLK_ENABLE;
 	}
+
 	if (ios->bus_width == MMC_BUS_WIDTH_8)
 		clk |= MCI_CLK_WIDEBUS_8;
 	else if (ios->bus_width == MMC_BUS_WIDTH_4)
@@ -2975,11 +2856,15 @@ msmsdcc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 	/* Select free running MCLK as input clock of cm_dll_sdc4 */
 	clk |= (2 << 23);
 
+	/* Clear IO_PAD_PWR_SWITCH while powering off the card */
+	if (!ios->vdd)
+		host->io_pad_pwr_switch = 0;
+
 	if (host->io_pad_pwr_switch)
 		clk |= IO_PAD_PWR_SWITCH;
 
 	/* Don't write into registers if clocks are disabled */
-	if (atomic_read(&host->clks_on)) {
+	if (host->clks_on) {
 		if (readl_relaxed(host->base + MMCICLOCK) != clk) {
 			writel_relaxed(clk, host->base + MMCICLOCK);
 			msmsdcc_sync_reg_wr(host);
@@ -2991,13 +2876,14 @@ msmsdcc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		}
 	}
 
-	if (!(clk & MCI_CLK_ENABLE) && atomic_read(&host->clks_on)) {
+	if (!(clk & MCI_CLK_ENABLE) && host->clks_on) {
 		msmsdcc_cfg_sdio_wakeup(host, true);
 		msmsdcc_setup_clocks(host, false);
+		host->clks_on = 0;
 	}
 
 	if (host->cmd19_tuning_in_progress)
-		WARN(!atomic_read(&host->clks_on),
+		WARN(!host->clks_on,
 			"cmd19_tuning_in_progress but SDCC clocks are OFF\n");
 
 	/* Let interrupts be disabled if the host is powered off */
@@ -3005,7 +2891,7 @@ msmsdcc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		enable_irq(host->core_irqres->start);
 		host->sdcc_irq_disabled = 0;
 	}
-out:
+
 	spin_unlock_irqrestore(&host->lock, flags);
 }
 
@@ -3078,14 +2964,14 @@ static void msmsdcc_enable_sdio_irq(struct mmc_host *mmc, int enable)
 	spin_lock_irqsave(&host->lock, flags);
 	if (enable) {
 		host->mci_irqenable |= MCI_SDIOINTOPERMASK;
-		if (atomic_read(&host->clks_on)) {
+		if (host->clks_on) {
 			writel_relaxed(readl_relaxed(host->base + MMCIMASK0) |
 				MCI_SDIOINTOPERMASK, host->base + MMCIMASK0);
 			mb();
 		}
 	} else {
 		host->mci_irqenable &= ~MCI_SDIOINTOPERMASK;
-		if (atomic_read(&host->clks_on)) {
+		if (host->clks_on) {
 			writel_relaxed(readl_relaxed(host->base + MMCIMASK0) &
 				~MCI_SDIOINTOPERMASK, host->base + MMCIMASK0);
 			mb();
@@ -3099,7 +2985,7 @@ static void msmsdcc_print_rpm_info(struct msmsdcc_host *host)
 {
 	struct device *dev = mmc_dev(host->mmc);
 
-	pr_err("%s: RPM: runtime_status=%d, usage_count=%d,"
+	pr_info("%s: RPM: runtime_status=%d, usage_count=%d,"
 		" is_suspended=%d, disable_depth=%d, runtime_error=%d,"
 		" request_pending=%d, request=%d\n",
 		mmc_hostname(host->mmc), dev->power.runtime_status,
@@ -3125,9 +3011,6 @@ static int msmsdcc_enable(struct mmc_host *mmc)
 			pm_runtime_get_noresume(dev);
 			goto out;
 		}
-	} else if (dev->power.runtime_status == RPM_RESUMING) {
-		pm_runtime_get_noresume(dev);
-		goto out;
 	}
 
 	rc = pm_runtime_get_sync(dev);
@@ -3181,44 +3064,46 @@ static int msmsdcc_enable(struct mmc_host *mmc)
 {
 	struct msmsdcc_host *host = mmc_priv(mmc);
 	unsigned long flags;
-	int rc = 0;
 
 	msmsdcc_pm_qos_update_latency(host, 1);
 
 	if (mmc->card && mmc_card_sdio(mmc->card)) {
+		rc = 0;
 		goto out;
 	}
 
-	rc = msmsdcc_setup_clocks(host, true);
-	 if (rc) {
-		msmsdcc_pm_qos_update_latency(host, 0);
-		return rc;
+	spin_lock_irqsave(&host->lock, flags);
+	if (!host->clks_on) {
+		msmsdcc_setup_clocks(host, true);
+		host->clks_on = 1;
 	}
+	spin_unlock_irqrestore(&host->lock, flags);
 
 out:
 	msmsdcc_msm_bus_cancel_work_and_set_vote(host, &mmc->ios);
-	return rc;
+	return 0;
 }
 
 static int msmsdcc_disable(struct mmc_host *mmc, int lazy)
 {
 	struct msmsdcc_host *host = mmc_priv(mmc);
 	unsigned long flags;
-	int rc = 0;
 
 	msmsdcc_pm_qos_update_latency(host, 0);
 
 	if (mmc->card && mmc_card_sdio(mmc->card))
 		goto out;
 
-	rc = msmsdcc_setup_clocks(host, false);
-	if (rc) {
-		msmsdcc_pm_qos_update_latency(host, 1);
-		return rc;
+	spin_lock_irqsave(&host->lock, flags);
+	if (host->clks_on) {
+		msmsdcc_setup_clocks(host, false);
+		host->clks_on = 0;
 	}
+	spin_unlock_irqrestore(&host->lock, flags);
+
 out:
 	msmsdcc_msm_bus_queue_work(host);
-	return rc;
+	return 0;
 }
 #endif
 
@@ -3229,12 +3114,14 @@ static int msmsdcc_switch_io_voltage(struct mmc_host *mmc,
 	unsigned long flags;
 	int rc = 0;
 
+	spin_lock_irqsave(&host->lock, flags);
+	host->io_pad_pwr_switch = 0;
+	spin_unlock_irqrestore(&host->lock, flags);
+
 	switch (ios->signal_voltage) {
 	case MMC_SIGNAL_VOLTAGE_330:
 		/* Set VDD IO to high voltage range (2.7v - 3.6v) */
 		rc = msmsdcc_set_vdd_io_vol(host, VDD_IO_HIGH, 0);
-		if (!rc)
-			msmsdcc_update_io_pad_pwr_switch(host);
 		goto out;
 	case MMC_SIGNAL_VOLTAGE_180:
 		break;
@@ -3245,8 +3132,6 @@ static int msmsdcc_switch_io_voltage(struct mmc_host *mmc,
 		 * DDR 1.2V mode.
 		 */
 		rc = msmsdcc_set_vdd_io_vol(host, VDD_IO_SET_LEVEL, 1200000);
-		if (!rc)
-			msmsdcc_update_io_pad_pwr_switch(host);
 		goto out;
 	default:
 		/* invalid selection. don't do anything */
@@ -3285,7 +3170,12 @@ static int msmsdcc_switch_io_voltage(struct mmc_host *mmc,
 	if (rc)
 		goto out;
 
-	msmsdcc_update_io_pad_pwr_switch(host);
+	spin_lock_irqsave(&host->lock, flags);
+	writel_relaxed((readl_relaxed(host->base + MMCICLOCK) |
+			IO_PAD_PWR_SWITCH), host->base + MMCICLOCK);
+	msmsdcc_sync_reg_wr(host);
+	host->io_pad_pwr_switch = 1;
+	spin_unlock_irqrestore(&host->lock, flags);
 
 	/* Wait 5 ms for the voltage regulater in the card to become stable. */
 	usleep_range(5000, 5500);
@@ -3668,7 +3558,7 @@ static int msmsdcc_execute_tuning(struct mmc_host *mmc)
 
 	spin_lock_irqsave(&host->lock, flags);
 	WARN(!host->pwr, "SDCC power is turned off\n");
-	WARN(!atomic_read(&host->clks_on), "SDCC clocks are turned off\n");
+	WARN(!host->clks_on, "SDCC clocks are turned off\n");
 	WARN(host->sdcc_irq_disabled, "SDCC IRQ is disabled\n");
 
 	host->cmd19_tuning_in_progress = 1;
@@ -3904,8 +3794,9 @@ msmsdcc_platform_sdiowakeup_irq(int irq, void *dev_id)
 		host->sdio_wakeupirq_disabled = 1;
 	}
 	if (host->plat->is_sdio_al_client) {
-		if (!atomic_read(&host->clks_on)) {
+		if (!host->clks_on) {
 			msmsdcc_setup_clocks(host, true);
+			host->clks_on = 1;
 		}
 		if (host->sdcc_irq_disabled) {
 			writel_relaxed(host->mci_irqenable,
@@ -4470,10 +4361,10 @@ static void msmsdcc_print_regs(const char *name, void __iomem *base,
 	if (!base)
 		return;
 
-	pr_err("===== %s: Register Dumps @phys_base=0x%x, @virt_base=0x%x"
+	pr_info("===== %s: Register Dumps @phys_base=0x%x, @virt_base=0x%x"
 		" =====\n", name, phys_base, (u32)base);
 	for (i = 0; i < no_of_regs; i = i + 4) {
-		pr_err("Reg=0x%.2x: 0x%.8x, 0x%.8x, 0x%.8x, 0x%.8x\n", i*4,
+		pr_info("Reg=0x%.2x: 0x%.8x, 0x%.8x, 0x%.8x, 0x%.8x\n", i*4,
 			(u32)readl_relaxed(base + i*4),
 			(u32)readl_relaxed(base + ((i+1)*4)),
 			(u32)readl_relaxed(base + ((i+2)*4)),
@@ -4484,46 +4375,41 @@ static void msmsdcc_print_regs(const char *name, void __iomem *base,
 static void msmsdcc_dump_sdcc_state(struct msmsdcc_host *host)
 {
 	/* Dump current state of SDCC clocks, power and irq */
-	pr_err("%s: SDCC PWR is %s\n", mmc_hostname(host->mmc),
+	pr_info("%s: SDCC PWR is %s\n", mmc_hostname(host->mmc),
 		(host->pwr ? "ON" : "OFF"));
-	pr_err("%s: SDCC clks are %s, MCLK rate=%d\n",
-		mmc_hostname(host->mmc),
-		(atomic_read(&host->clks_on) ? "ON" : "OFF"),
+	pr_info("%s: SDCC clks are %s, MCLK rate=%d\n",
+		mmc_hostname(host->mmc), (host->clks_on ? "ON" : "OFF"),
 		(u32)clk_get_rate(host->clk));
-	pr_err("%s: SDCC irq is %s\n", mmc_hostname(host->mmc),
+	pr_info("%s: SDCC irq is %s\n", mmc_hostname(host->mmc),
 		(host->sdcc_irq_disabled ? "disabled" : "enabled"));
 
 	/* Now dump SDCC registers. Don't print FIFO registers */
-	if (atomic_read(&host->clks_on)) {
+	if (host->clks_on)
 		msmsdcc_print_regs("SDCC-CORE", host->base,
 				   host->core_memres->start, 28);
-		pr_err("%s: MCI_TEST_INPUT = 0x%.8x\n",
-			mmc_hostname(host->mmc),
-			readl_relaxed(host->base + MCI_TEST_INPUT));
-	}
 
 	if (host->curr.data) {
 		if (!msmsdcc_is_dma_possible(host, host->curr.data))
-			pr_err("%s: PIO mode\n", mmc_hostname(host->mmc));
+			pr_info("%s: PIO mode\n", mmc_hostname(host->mmc));
 		else if (host->is_dma_mode)
-			pr_err("%s: ADM mode: busy=%d, chnl=%d, crci=%d\n",
+			pr_info("%s: ADM mode: busy=%d, chnl=%d, crci=%d\n",
 				mmc_hostname(host->mmc), host->dma.busy,
 				host->dma.channel, host->dma.crci);
 		else if (host->is_sps_mode) {
-			if (host->sps.busy && atomic_read(&host->clks_on))
+			if (host->sps.busy && host->clks_on)
 				msmsdcc_print_regs("SDCC-DML", host->dml_base,
 						   host->dml_memres->start,
 						   16);
-			pr_err("%s: SPS mode: busy=%d\n",
+			pr_info("%s: SPS mode: busy=%d\n",
 				mmc_hostname(host->mmc), host->sps.busy);
 		}
 
-		pr_err("%s: xfer_size=%d, data_xfered=%d, xfer_remain=%d\n",
+		pr_info("%s: xfer_size=%d, data_xfered=%d, xfer_remain=%d\n",
 			mmc_hostname(host->mmc), host->curr.xfer_size,
 			host->curr.data_xfered, host->curr.xfer_remain);
 	}
 
-	pr_err("%s: got_dataend=%d, prog_enable=%d,"
+	pr_info("%s: got_dataend=%d, prog_enable=%d,"
 		" wait_for_auto_prog_done=%d, got_auto_prog_done=%d,"
 		" req_tout_ms=%d\n", mmc_hostname(host->mmc),
 		host->curr.got_dataend, host->prog_enable,
@@ -4947,7 +4833,7 @@ msmsdcc_probe(struct platform_device *pdev)
 		(1 + ((3 * USEC_PER_SEC) /
 		      msmsdcc_get_min_sup_clk_rate(host)));
 
-	atomic_set(&host->clks_on, 1);
+	host->clks_on = 1;
 	/* Apply Hard reset to SDCC to put it in power on default state */
 	msmsdcc_hard_reset(host);
 
@@ -5405,7 +5291,6 @@ int msmsdcc_sdio_al_lpm(struct mmc_host *mmc, bool enable)
 {
 	struct msmsdcc_host *host = mmc_priv(mmc);
 	unsigned long flags;
-	int rc = 0;
 
 	spin_lock_irqsave(&host->lock, flags);
 	pr_debug("%s: %sabling LPM\n", mmc_hostname(mmc),
@@ -5418,9 +5303,10 @@ int msmsdcc_sdio_al_lpm(struct mmc_host *mmc, bool enable)
 			host->sdcc_irq_disabled = 1;
 		}
 
-		rc = msmsdcc_setup_clocks(host, false);
-		if (rc)
-			goto out;
+		if (host->clks_on) {
+			msmsdcc_setup_clocks(host, false);
+			host->clks_on = 0;
+		}
 
 		if (host->plat->sdio_lpm_gpio_setup &&
 				!host->sdio_gpio_lpm) {
@@ -5436,10 +5322,6 @@ int msmsdcc_sdio_al_lpm(struct mmc_host *mmc, bool enable)
 			host->sdio_wakeupirq_disabled = 0;
 		}
 	} else {
-		rc = msmsdcc_setup_clocks(host, true);
-		if (rc)
-			goto out;
-
 		if (!host->sdio_wakeupirq_disabled) {
 			disable_irq_nosync(host->plat->sdiowakeup_irq);
 			host->sdio_wakeupirq_disabled = 1;
@@ -5454,11 +5336,12 @@ int msmsdcc_sdio_al_lpm(struct mmc_host *mmc, bool enable)
 			host->sdio_gpio_lpm = 0;
 		}
 
-		rc = msmsdcc_setup_clocks(host, true);
-		if (rc)
-			goto out;
+		if (!host->clks_on) {
+			msmsdcc_setup_clocks(host, true);
+			host->clks_on = 1;
+		}
 
-		if (host->sdcc_irq_disabled && atomic_read(&host->clks_on)) {
+		if (host->sdcc_irq_disabled) {
 			writel_relaxed(host->mci_irqenable,
 				       host->base + MMCIMASK0);
 			mb();
@@ -5466,9 +5349,8 @@ int msmsdcc_sdio_al_lpm(struct mmc_host *mmc, bool enable)
 			host->sdcc_irq_disabled = 0;
 		}
 	}
-out:
 	spin_unlock_irqrestore(&host->lock, flags);
-	return rc;
+	return 0;
 }
 #else
 int msmsdcc_sdio_al_lpm(struct mmc_host *mmc, bool enable)
@@ -5702,7 +5584,7 @@ static int msmsdcc_suspend_noirq(struct device *dev)
 	 * during suspend and not allowing TCXO.
 	 */
 
-	if (atomic_read(&host->clks_on)) {
+	if (host->clks_on) {
 		pr_warn("%s: clocks are on after suspend, aborting system "
 				"suspend\n", mmc_hostname(mmc));
 		rc = -EAGAIN;
